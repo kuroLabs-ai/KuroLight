@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1060" height="270"
+     viewBox="55 55 1060 270">
+  <defs>
+    <linearGradient id="rgb" x1="0%" y1="50%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#25C7FF"/>
+      <stop offset="22%" stop-color="#3B82F6"/>
+      <stop offset="43%" stop-color="#8B5CF6"/>
+      <stop offset="62%" stop-color="#D946EF"/>
+      <stop offset="80%" stop-color="#FB7185"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+  </defs>
+
+  <g font-family="Inter, Manrope, Arial, sans-serif"
+     font-size="238"
+     font-weight="750"
+     letter-spacing="-13">
+    <text x="72" y="278" fill="#F4F6FA">Kuro</text>
+    <text x="570" y="278" fill="url(#rgb)">Light</text>
+  </g>
+</svg>
