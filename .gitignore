@@ -1,0 +1,63 @@
+# Planning & Internal Specs (excluded per project specification)
+PRD.md
+TDD.md
+Workflow.md
+Logo.png
+*PRD*
+*TDD*
+*Workflow*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Caches & Runtime Data
+.cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.log
+*.sqlite3
+*.db
+
+# IDE & Editor
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# KuroLight Local Runtime Data & Caches
+.kurolight/
+data/cache/
+data/projects/

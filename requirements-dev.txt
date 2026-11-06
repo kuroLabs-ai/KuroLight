@@ -1,0 +1,4 @@
+# KuroLight — Root Development Requirements
+-r requirements/base.txt
+-r requirements/image-processing.txt
+-r requirements/testing.txt
