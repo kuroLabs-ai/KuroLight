@@ -1,0 +1,1282 @@
+import {
+  AssetMetadataOverrides,
+  Collection,
+  EditState,
+  ExportPreset,
+  ImageAsset,
+  Preset,
+  ColorScopes,
+  SmartCollectionRules,
+  WorkspaceId,
+} from './types';
+
+type PythonApi = Record<string, (...args: unknown[]) => Promise<unknown>>;
+
+declare global {
+  interface Window {
+    pywebview?: { api: PythonApi };
+  }
+}
+
+interface BridgeEvents {
+  image_updated: [string];
+  before_image_updated: [string];
+  histogram_updated: [{ r: number[]; g: number[]; b: number[]; lum: number[] }];
+  assets_updated: [ImageAsset[]];
+  asset_count_updated: [number];
+  trash_count_updated: [number];
+  library_loading: [{ loading: boolean; message: string; cancellable: boolean }];
+  collections_updated: [Collection[]];
+  presets_updated: [Preset[]];
+  history_updated: [string[], number];
+  asset_selected: [ImageAsset | null, EditState | null];
+  filmstrip_toggled: [boolean];
+  workspace_changed: [WorkspaceId];
+  color_scopes_updated: [ColorScopes | null];
+  notification: [{ title: string; message: string; level: string }];
+  processing_progress: [number | null, string, boolean];
+  ready: [boolean];
+}
+
+export interface AssetPage {
+  assets: ImageAsset[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface SourceFolder {
+  source_folder: string;
+  asset_count: number;
+}
+
+export interface SourceFolderPage {
+  folders: SourceFolder[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface AssetPageFilters {
+  collection_id?: string | null;
+  source_folder?: string | null;
+  minimum_rating?: number;
+  flag?: 'all' | 'flagged' | 'unflagged' | 'rejected';
+  search?: string;
+  sort_by?: 'file_name' | 'date_taken' | 'rating' | 'file_size';
+  ascending?: boolean;
+  trash_only?: boolean;
+}
+
+function isAssetMetadataOverrides(value: unknown): value is AssetMetadataOverrides {
+  if (!value || typeof value !== 'object') return false;
+  const overrides = value as Record<string, unknown>;
+  return (
+    typeof overrides.title === 'string' &&
+    typeof overrides.description === 'string' &&
+    Array.isArray(overrides.keywords) &&
+    overrides.keywords.every((keyword) => typeof keyword === 'string') &&
+    typeof overrides.copyright === 'string'
+  );
+}
+
+class PythonBridge {
+  private bridge: PythonApi | null = null;
+  private thumbnailCache = new Map<string, string>();
+  private thumbnailRequests = new Map<
+    string,
+    { resolve: (url: string) => void; reject: (error: Error) => void }
+  >();
+  private thumbnailPromises = new Map<string, Promise<string>>();
+  private thumbnailTimer: number | null = null;
+  private listeners: {
+    [K in keyof BridgeEvents]: Set<(...args: BridgeEvents[K]) => void>;
+  } = {
+    image_updated: new Set(),
+    before_image_updated: new Set(),
+    histogram_updated: new Set(),
+    assets_updated: new Set(),
+    asset_count_updated: new Set(),
+    trash_count_updated: new Set(),
+    library_loading: new Set(),
+    collections_updated: new Set(),
+    presets_updated: new Set(),
+    history_updated: new Set(),
+    asset_selected: new Set(),
+    filmstrip_toggled: new Set(),
+    workspace_changed: new Set(),
+    color_scopes_updated: new Set(),
+    notification: new Set(),
+    processing_progress: new Set(),
+    ready: new Set(),
+  };
+  public isReady: boolean = false;
+  private retryCount = 0;
+
+  public get hasNativeApi(): boolean {
+    return this.bridge !== null;
+  }
+
+  constructor() {
+    this.init();
+  }
+
+  private init() {
+    if (window.pywebview?.api) {
+      this.bridge = window.pywebview.api;
+      this.isReady = true;
+      this.bindNativeEvents();
+      console.log('[Bridge] Connected to Python pywebview API.');
+      this.emit('ready', true);
+    } else if (this.retryCount < 20) {
+      this.retryCount++;
+      setTimeout(() => this.init(), 50);
+    } else {
+      console.log('[Bridge] Standalone web mode (Mock bridge active)');
+      this.isReady = true;
+    }
+  }
+
+  private bindNativeEvents() {
+    const events = [
+      'image_updated',
+      'before_image_updated',
+      'histogram_updated',
+      'assets_updated',
+      'asset_count_updated',
+      'trash_count_updated',
+      'library_loading',
+      'collections_updated',
+      'presets_updated',
+      'history_updated',
+      'asset_selected',
+      'filmstrip_toggled',
+      'workspace_changed',
+      'color_scopes_updated',
+      'notification',
+      'processing_progress',
+    ];
+
+    events.forEach((event) => {
+      window.addEventListener(`kurolight:${event}`, ((nativeEvent: CustomEvent<unknown[]>) => {
+        const args = nativeEvent.detail;
+        try {
+          switch (event) {
+            case 'histogram_updated':
+              this.emit(event, {
+                r: args[0] as number[],
+                g: args[1] as number[],
+                b: args[2] as number[],
+                lum: args[3] as number[],
+              });
+              break;
+            case 'color_scopes_updated':
+              this.emit(event, args[0] as ColorScopes | null);
+              break;
+            case 'assets_updated':
+              this.emit(event, JSON.parse(args[0] as string) as ImageAsset[]);
+              break;
+            case 'asset_count_updated':
+            case 'trash_count_updated':
+              if (!Number.isInteger(args[0]) || (args[0] as number) < 0) {
+                throw new TypeError(`Invalid ${event} value from Python`);
+              }
+              this.emit(event, args[0] as number);
+              break;
+            case 'library_loading':
+              this.emit(
+                event,
+                JSON.parse(args[0] as string) as BridgeEvents['library_loading'][0],
+              );
+              break;
+            case 'collections_updated':
+              this.emit(event, JSON.parse(args[0] as string) as Collection[]);
+              break;
+            case 'presets_updated':
+              this.emit(event, JSON.parse(args[0] as string) as Preset[]);
+              break;
+            case 'asset_selected':
+              this.emit(
+                event,
+                JSON.parse(args[0] as string) as ImageAsset | null,
+                JSON.parse(args[1] as string) as EditState | null,
+              );
+              break;
+            case 'notification':
+              this.emit(event, {
+                title: args[0] as string,
+                message: args[1] as string,
+                level: args[2] as string,
+              });
+              break;
+            case 'processing_progress':
+              this.emit(
+                event,
+                typeof args[0] === 'number' ? args[0] : null,
+                String(args[1] ?? ''),
+                args[2] === true,
+              );
+              break;
+            case 'history_updated':
+              this.emit(event, args[0] as string[], args[1] as number);
+              break;
+            case 'image_updated':
+            case 'before_image_updated':
+              this.emit(event, args[0] as string);
+              break;
+            case 'filmstrip_toggled':
+              this.emit(event, args[0] as boolean);
+              break;
+            case 'workspace_changed':
+              this.emit(event, args[0] as WorkspaceId);
+              break;
+          }
+        } catch (error) {
+          console.error(`Invalid ${event} event from Python`, error);
+        }
+      }) as EventListener);
+    });
+  }
+
+  public on<K extends keyof BridgeEvents>(
+    event: K,
+    callback: (...args: BridgeEvents[K]) => void,
+  ) {
+    this.listeners[event].add(callback);
+    return () => this.off(event, callback);
+  }
+
+  public off<K extends keyof BridgeEvents>(
+    event: K,
+    callback: (...args: BridgeEvents[K]) => void,
+  ) {
+    this.listeners[event].delete(callback);
+  }
+
+  private emit<K extends keyof BridgeEvents>(event: K, ...args: BridgeEvents[K]) {
+    this.listeners[event].forEach((callback) => callback(...args));
+  }
+
+  // ── Public Python Invocations ──────────────────────────────────────
+
+  public selectAsset(assetId: string) {
+    if (this.bridge?.select_asset) {
+      this.bridge.select_asset(assetId);
+    } else {
+      console.log('[Bridge Mock] selectAsset:', assetId);
+    }
+  }
+
+  public openInDevelop(assetId: string) {
+    if (this.bridge?.open_in_develop) {
+      this.bridge.open_in_develop(assetId);
+    } else {
+      this.selectAsset(assetId);
+      this.switchWorkspace('develop');
+    }
+  }
+
+  public updateEditState(state: EditState) {
+    if (this.bridge?.update_edit_state) {
+      this.bridge.update_edit_state(JSON.stringify(state));
+    }
+  }
+
+  public saveEditState(state: EditState) {
+    if (this.bridge?.save_edit_state) {
+      this.bridge.save_edit_state(JSON.stringify(state));
+    }
+  }
+
+  public importFiles() {
+    if (this.bridge?.import_files) {
+      this.bridge.import_files();
+    } else {
+      console.log('[Bridge Mock] importFiles requested');
+    }
+  }
+
+  public async importDroppedFile(fileName: string, dataUrl: string): Promise<{ ok: boolean; error?: string }> {
+    if (this.bridge?.import_dropped_file) {
+      const response = await this.bridge.import_dropped_file(fileName, dataUrl);
+      if (typeof response !== 'string') throw new TypeError('Expected JSON from image import');
+      return JSON.parse(response) as { ok: boolean; error?: string };
+    }
+    return { ok: false, error: 'Drag-and-drop import requires the desktop application.' };
+  }
+
+  public importFolder() {
+    if (this.bridge?.import_folder) {
+      this.bridge.import_folder();
+    } else {
+      console.log('[Bridge Mock] importFolder requested');
+    }
+  }
+
+  public cancelImport() {
+    if (this.bridge?.cancel_import) {
+      this.bridge.cancel_import();
+    }
+  }
+
+  public async getAssetPage(
+    offset: number,
+    limit = 100,
+    filters: AssetPageFilters = {},
+  ): Promise<AssetPage> {
+    if (!Number.isInteger(offset) || offset < 0) {
+      throw new RangeError('Asset page offset must be a non-negative integer.');
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      throw new RangeError('Asset page limit must be an integer between 1 and 200.');
+    }
+    if (!this.bridge?.get_asset_page) {
+      throw new Error('Catalog pagination requires the KuroLight desktop app.');
+    }
+
+    const response = await this.bridge.get_asset_page(
+      offset,
+      limit,
+      JSON.stringify(filters),
+    );
+    if (typeof response !== 'string') {
+      throw new TypeError('Expected JSON from catalog page request.');
+    }
+    const page = JSON.parse(response) as AssetPage;
+    if (
+      !Array.isArray(page.assets) ||
+      !Number.isInteger(page.total) ||
+      !Number.isInteger(page.offset) ||
+      !Number.isInteger(page.limit)
+    ) {
+      throw new TypeError('Invalid catalog page response.');
+    }
+    return page;
+  }
+
+  public async getAssetIds(filters: AssetPageFilters = {}): Promise<string[]> {
+    if (!this.bridge?.get_asset_ids) {
+      throw new Error('Catalog selection requires the KuroLight desktop app.');
+    }
+    const response = await this.bridge.get_asset_ids(JSON.stringify(filters));
+    if (typeof response !== 'string') {
+      throw new TypeError('Expected JSON from catalog ID request.');
+    }
+    const ids: unknown = JSON.parse(response);
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) {
+      throw new TypeError('Invalid catalog ID response.');
+    }
+    return ids;
+  }
+
+  public async getSourceFolders(offset: number, limit = 100): Promise<SourceFolderPage> {
+    if (!Number.isInteger(offset) || offset < 0) {
+      throw new RangeError('Folder page offset must be a non-negative integer.');
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      throw new RangeError('Folder page limit must be an integer between 1 and 200.');
+    }
+    if (!this.bridge?.get_source_folders) {
+      throw new Error('Source folder browsing requires the KuroLight desktop app.');
+    }
+    const response = await this.bridge.get_source_folders(offset, limit);
+    if (typeof response !== 'string') {
+      throw new TypeError('Expected JSON from source folder request.');
+    }
+    const page = JSON.parse(response) as SourceFolderPage;
+    if (
+      !Array.isArray(page.folders) ||
+      !page.folders.every(
+        (folder) =>
+          typeof folder.source_folder === 'string' &&
+          Number.isInteger(folder.asset_count) &&
+          folder.asset_count >= 0,
+      ) ||
+      !Number.isInteger(page.total) ||
+      !Number.isInteger(page.offset) ||
+      !Number.isInteger(page.limit)
+    ) {
+      throw new TypeError('Invalid source folder response.');
+    }
+    return page;
+  }
+
+  public async isAssetInCollection(assetId: string, collectionId: string): Promise<boolean> {
+    if (!this.bridge?.is_asset_in_collection) {
+      throw new Error('Collection lookup requires the KuroLight desktop app.');
+    }
+    const result = await this.bridge.is_asset_in_collection(assetId, collectionId);
+    if (typeof result !== 'boolean') {
+      throw new TypeError('Invalid collection membership response.');
+    }
+    return result;
+  }
+
+  public getThumbnail(assetId: string): Promise<string> {
+    const cached = this.thumbnailCache.get(assetId);
+    if (cached !== undefined) {
+      this.thumbnailCache.delete(assetId);
+      this.thumbnailCache.set(assetId, cached);
+      return Promise.resolve(cached);
+    }
+
+    const pending = this.thumbnailPromises.get(assetId);
+    if (pending) return pending;
+
+    const request = new Promise<string>((resolve, reject) => {
+      this.thumbnailRequests.set(assetId, { resolve, reject });
+    });
+    this.thumbnailPromises.set(assetId, request);
+    if (this.thumbnailTimer === null) {
+      this.thumbnailTimer = window.setTimeout(() => {
+        this.thumbnailTimer = null;
+        void this.flushThumbnailRequests();
+      }, 20);
+    }
+    return request;
+  }
+
+  private async flushThumbnailRequests(): Promise<void> {
+    const ids = Array.from(this.thumbnailRequests.keys()).slice(0, 32);
+    const requests = ids.map((id) => [id, this.thumbnailRequests.get(id)!] as const);
+    ids.forEach((id) => this.thumbnailRequests.delete(id));
+
+    try {
+      if (!this.bridge?.get_thumbnails) {
+        for (const [id, waiter] of requests) {
+          this.thumbnailPromises.delete(id);
+          waiter.resolve('');
+        }
+      } else {
+        const response = await this.bridge.get_thumbnails(JSON.stringify(ids));
+        if (typeof response !== 'string') {
+          throw new Error('Thumbnail loading requires the KuroLight desktop app.');
+        }
+        const results = JSON.parse(response) as Record<string, string>;
+        if (typeof results.error === 'string') throw new Error(results.error);
+
+        for (const [id, waiter] of requests) {
+          const url = results[id] ?? '';
+          this.thumbnailCache.set(id, url);
+          while (this.thumbnailCache.size > 128) {
+            const oldest = this.thumbnailCache.keys().next().value;
+            if (oldest === undefined) break;
+            this.thumbnailCache.delete(oldest);
+          }
+          this.thumbnailPromises.delete(id);
+          waiter.resolve(url);
+        }
+      }
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      for (const [id, waiter] of requests) {
+        this.thumbnailPromises.delete(id);
+        waiter.reject(failure);
+      }
+    }
+
+    if (this.thumbnailRequests.size > 0 && this.thumbnailTimer === null) {
+      this.thumbnailTimer = window.setTimeout(() => {
+        this.thumbnailTimer = null;
+        void this.flushThumbnailRequests();
+      }, 0);
+    }
+  }
+
+  public autoTone() {
+    if (this.bridge?.auto_tone) {
+      this.bridge.auto_tone();
+    }
+  }
+
+  public undo() {
+    if (this.bridge?.undo) {
+      this.bridge.undo();
+    }
+  }
+
+  public redo() {
+    if (this.bridge?.redo) {
+      this.bridge.redo();
+    }
+  }
+
+  public toggleFilmstrip() {
+    if (this.bridge?.toggle_filmstrip) {
+      this.bridge.toggle_filmstrip();
+    }
+  }
+
+  public setWorkspace(workspaceId: WorkspaceId) {
+    if (this.bridge?.set_workspace) {
+      this.bridge.set_workspace(workspaceId);
+    }
+  }
+
+  public switchWorkspace(workspaceId: WorkspaceId) {
+    this.setWorkspace(workspaceId);
+    this.emit('workspace_changed', workspaceId);
+  }
+
+  public async getAISettings(): Promise<{
+    provider: 'gemini' | 'openai' | 'anthropic';
+    model: string;
+    has_api_key: boolean;
+    saved_keys: Record<'gemini' | 'openai' | 'anthropic', boolean>;
+    privacy_disclosure_accepted: boolean;
+    privacy_disclosure_version: string;
+    send_image_context: boolean;
+  }> {
+    const response = await this.bridge?.get_ai_settings?.();
+    if (typeof response !== 'string') {
+      throw new Error('Kuro AI settings are available in the KuroLight desktop app.');
+    }
+    return JSON.parse(response) as {
+      provider: 'gemini' | 'openai' | 'anthropic';
+      model: string;
+      has_api_key: boolean;
+      saved_keys: Record<'gemini' | 'openai' | 'anthropic', boolean>;
+      privacy_disclosure_accepted: boolean;
+      privacy_disclosure_version: string;
+      send_image_context: boolean;
+    };
+  }
+
+  public async saveAISettings(settings: {
+    provider: string;
+    model: string;
+    api_key?: string;
+    remove_api_key?: boolean;
+    privacy_disclosure_accepted?: boolean;
+    privacy_disclosure_version?: string;
+    send_image_context?: boolean;
+  }): Promise<{
+    provider: 'gemini' | 'openai' | 'anthropic';
+    model: string;
+    has_api_key: boolean;
+    saved_keys: Record<'gemini' | 'openai' | 'anthropic', boolean>;
+    privacy_disclosure_accepted: boolean;
+    privacy_disclosure_version: string;
+    send_image_context: boolean;
+  }> {
+    const response = await this.bridge?.save_ai_settings?.(JSON.stringify(settings));
+    if (typeof response !== 'string') {
+      throw new Error('Kuro AI settings are available in the KuroLight desktop app.');
+    }
+    return JSON.parse(response) as {
+      provider: 'gemini' | 'openai' | 'anthropic';
+      model: string;
+      has_api_key: boolean;
+      saved_keys: Record<'gemini' | 'openai' | 'anthropic', boolean>;
+      privacy_disclosure_accepted: boolean;
+      privacy_disclosure_version: string;
+      send_image_context: boolean;
+    };
+  }
+
+  public async getAIModels(provider: string, apiKey: string): Promise<Array<{ id: string; name: string }>> {
+    const response = await this.bridge?.get_ai_models?.(provider, apiKey);
+    if (typeof response !== 'string') {
+      throw new Error('Model discovery is available in the KuroLight desktop app.');
+    }
+    return JSON.parse(response) as Array<{ id: string; name: string }>;
+  }
+
+  public async testAIConnection(
+    provider: string,
+    apiKey: string,
+  ): Promise<{ ok: boolean; model_count: number; models: Array<{ id: string; name: string }> }> {
+    const response = await this.bridge?.test_ai_connection?.(provider, apiKey);
+    if (typeof response !== 'string') {
+      throw new Error('Provider connection tests are available in the KuroLight desktop app.');
+    }
+    return JSON.parse(response) as {
+      ok: boolean;
+      model_count: number;
+      models: Array<{ id: string; name: string }>;
+    };
+  }
+
+  public async proposeAIEdits(
+    prompt: string,
+    history: Array<{ role: 'user' | 'assistant'; content: string }>,
+  ): Promise<{
+    message: string;
+    edits: Record<string, unknown>;
+    current_preview: string;
+    proposed_preview: string;
+    candidate_state: EditState | null;
+    base_state_fingerprint: string;
+  }> {
+    const response = await this.bridge?.propose_ai_edits?.(prompt, JSON.stringify(history));
+    if (typeof response !== 'string') {
+      throw new Error('Kuro AI image analysis is available in the KuroLight desktop app.');
+    }
+    return JSON.parse(response) as {
+      message: string;
+      edits: Record<string, unknown>;
+      current_preview: string;
+      proposed_preview: string;
+      candidate_state: EditState | null;
+      base_state_fingerprint: string;
+    };
+  }
+
+  public async applyAIProposal(
+    candidate: EditState,
+    assetId: string,
+    baseStateFingerprint: string,
+  ): Promise<void> {
+    if (!this.bridge?.apply_ai_proposal) {
+      throw new Error('Applying Kuro AI proposals is available in the KuroLight desktop app.');
+    }
+    await this.bridge.apply_ai_proposal(JSON.stringify(candidate), assetId, baseStateFingerprint);
+  }
+
+  public setRating(assetId: string, rating: number) {
+    if (this.bridge?.set_rating) {
+      this.bridge.set_rating(assetId, rating);
+    }
+  }
+
+  public batchSetRating(assetIds: string[], rating: number) {
+    if (this.bridge?.batch_set_rating) {
+      this.bridge.batch_set_rating(JSON.stringify(assetIds), rating);
+    }
+  }
+
+  public setFlag(assetId: string, flag: string) {
+    if (this.bridge?.set_flag) {
+      this.bridge.set_flag(assetId, flag);
+    }
+  }
+
+  public async updateAssetMetadataOverrides(
+    assetId: string,
+    overrides: AssetMetadataOverrides,
+  ): Promise<AssetMetadataOverrides> {
+    if (!this.bridge?.update_asset_metadata_overrides) {
+      throw new Error('Editing catalog metadata is available in the KuroLight desktop app.');
+    }
+    const response = await this.bridge.update_asset_metadata_overrides(
+      assetId,
+      JSON.stringify(overrides),
+    );
+    if (typeof response !== 'string') {
+      throw new TypeError('Invalid metadata response from Python');
+    }
+    const parsed: unknown = JSON.parse(response);
+    if (!isAssetMetadataOverrides(parsed)) {
+      throw new TypeError('Invalid metadata overrides from Python');
+    }
+    return parsed;
+  }
+
+  public batchSetFlag(assetIds: string[], flag: string) {
+    if (this.bridge?.batch_set_flag) {
+      this.bridge.batch_set_flag(JSON.stringify(assetIds), flag);
+    }
+  }
+
+  public deleteAssets(assetIds: string[]) {
+    if (this.bridge?.delete_assets) {
+      this.bridge.delete_assets(JSON.stringify(assetIds));
+    }
+  }
+
+  public restoreAssets(assetIds: string[]) {
+    if (this.bridge?.restore_assets) {
+      this.bridge.restore_assets(JSON.stringify(assetIds));
+    }
+  }
+
+  public permanentlyDeleteAssets(assetIds: string[]) {
+    if (this.bridge?.permanently_delete_assets) {
+      this.bridge.permanently_delete_assets(JSON.stringify(assetIds));
+    }
+  }
+
+  public createCollection(
+    name: string,
+    parentId: string | null = null,
+  ): Promise<unknown> | undefined {
+    if (this.bridge?.create_collection) {
+      return this.bridge.create_collection(name, parentId);
+    }
+    return undefined;
+  }
+
+  public createSmartCollection(
+    name: string,
+    rules: SmartCollectionRules,
+    parentId: string | null = null,
+  ): Promise<unknown> | undefined {
+    if (this.bridge?.create_smart_collection) {
+      return this.bridge.create_smart_collection(name, JSON.stringify(rules), parentId);
+    }
+    return undefined;
+  }
+
+  public updateSmartCollection(
+    collectionId: string,
+    name: string,
+    rules: SmartCollectionRules,
+  ): Promise<unknown> | undefined {
+    if (this.bridge?.update_smart_collection) {
+      return this.bridge.update_smart_collection(collectionId, name, JSON.stringify(rules));
+    }
+    return undefined;
+  }
+
+  public deleteCollection(collectionId: string) {
+    if (this.bridge?.delete_collection) {
+      this.bridge.delete_collection(collectionId);
+    }
+  }
+
+  public renameCollection(collectionId: string, newName: string) {
+    if (this.bridge?.rename_collection) {
+      this.bridge.rename_collection(collectionId, newName);
+    }
+  }
+
+  public addToCollection(collectionId: string, assetIds: string[]) {
+    if (this.bridge?.add_to_collection) {
+      this.bridge.add_to_collection(collectionId, JSON.stringify(assetIds));
+    }
+  }
+
+  // ── Crop Tool Methods ────────────────────────────────────────────────
+  public setCropMode(active: boolean) {
+    if (this.bridge?.set_crop_mode) {
+      this.bridge.set_crop_mode(active);
+    }
+  }
+
+  public applyCrop(x: number, y: number, w: number, h: number) {
+    if (this.bridge?.apply_crop) {
+      this.bridge.apply_crop(x, y, w, h);
+    }
+  }
+
+  public resetCrop() {
+    if (this.bridge?.reset_crop) {
+      this.bridge.reset_crop();
+    }
+  }
+
+  public cancelCrop() {
+    if (this.bridge?.cancel_crop) {
+      this.bridge.cancel_crop();
+    }
+  }
+
+  public removeFromCollection(collectionId: string, assetIds: string[]) {
+    if (this.bridge?.remove_from_collection) {
+      this.bridge.remove_from_collection(collectionId, JSON.stringify(assetIds));
+    }
+  }
+
+  public saveSnapshot(name: string) {
+    if (this.bridge?.save_snapshot) {
+      this.bridge.save_snapshot(name);
+    }
+  }
+
+  public restoreSnapshot(name: string) {
+    if (this.bridge?.restore_snapshot) {
+      this.bridge.restore_snapshot(name);
+    }
+  }
+
+  public deleteSnapshot(name: string) {
+    if (this.bridge?.delete_snapshot) {
+      this.bridge.delete_snapshot(name);
+    }
+  }
+
+  public applyPreset(nameOrId: string) {
+    if (this.bridge?.apply_preset) {
+      this.bridge.apply_preset(nameOrId);
+    }
+  }
+
+  public savePreset(name: string, category: string) {
+    if (this.bridge?.save_preset) {
+      this.bridge.save_preset(name, category);
+    }
+  }
+
+  public deletePreset(presetId: string) {
+    if (this.bridge?.delete_preset) {
+      this.bridge.delete_preset(presetId);
+    }
+  }
+
+  public jumpHistory(index: number) {
+    if (this.bridge?.jump_history) {
+      this.bridge.jump_history(index);
+    }
+  }
+
+  // ── Deliver / Export ─────────────────────────────────────────────────
+  public chooseExportFolder(): Promise<string> {
+    if (this.bridge?.choose_export_folder) {
+      return this.bridge.choose_export_folder().then((folder) =>
+        typeof folder === 'string' ? folder : '',
+      );
+    }
+    console.log('[Bridge Mock] chooseExportFolder');
+    return Promise.resolve('');
+  }
+
+  public getExportPresets(): Promise<ExportPreset[]> {
+    if (this.bridge?.get_export_presets) {
+      return this.bridge.get_export_presets().then((presetsJson) => {
+        try {
+          if (typeof presetsJson !== 'string') {
+            throw new TypeError('Expected JSON string for export presets');
+          }
+          return JSON.parse(presetsJson) as ExportPreset[];
+        } catch (error) {
+          console.error('Invalid export presets response from Python', error);
+          return [];
+        }
+      });
+    }
+    // Fallback default presets
+    return Promise.resolve([
+          {
+            id: 'web_srgb',
+            name: 'Web / Social Media',
+            format: 'JPEG',
+            quality: 85,
+            color_space: 'sRGB',
+            resize_mode: 'fit_long',
+            resize_value: 2048,
+            resize_unit: 'px',
+          },
+          {
+            id: 'fullres_jpeg',
+            name: 'Full Res JPEG',
+            format: 'JPEG',
+            quality: 95,
+            color_space: 'sRGB',
+            resize_mode: 'original',
+            resize_value: 0,
+            resize_unit: 'px',
+          },
+          {
+            id: 'print_tiff',
+            name: 'Print (16-bit TIFF)',
+            format: 'TIFF',
+            quality: 100,
+            color_space: 'Adobe RGB',
+            resize_mode: 'original',
+            resize_value: 0,
+            resize_unit: 'px',
+          },
+          {
+            id: 'instagram_square',
+            name: 'Instagram (1080px)',
+            format: 'JPEG',
+            quality: 90,
+            color_space: 'sRGB',
+            resize_mode: 'fit_long',
+            resize_value: 1080,
+            resize_unit: 'px',
+          },
+          {
+            id: 'lossless_png',
+            name: 'Lossless PNG',
+            format: 'PNG',
+            quality: 100,
+            color_space: 'sRGB',
+            resize_mode: 'original',
+            resize_value: 0,
+            resize_unit: 'px',
+          },
+        ]);
+  }
+
+  public exportAssets(settings: Record<string, unknown>): Promise<{
+    ok: boolean;
+    job_id?: string;
+    status?: string;
+    error?: string;
+  }> {
+    if (this.bridge?.export_assets) {
+      return this.bridge.export_assets(JSON.stringify(settings)).then((resJson) => {
+        try {
+          if (typeof resJson !== 'string') {
+            throw new TypeError('Expected JSON string from export operation');
+          }
+          return JSON.parse(resJson) as {
+            ok: boolean; job_id?: string; status?: string; error?: string;
+          };
+        } catch (error) {
+          return { ok: false, error: String(error) };
+        }
+      });
+    }
+    console.log('[Bridge Mock] exportAssets', settings);
+    return Promise.resolve({ ok: false, error: 'Background export requires the desktop application.' });
+  }
+
+  public async getExportJob(jobId: string): Promise<{
+    id: string; status: string; total: number; completed: number; succeeded: number;
+    failed: number; progress: number; current_asset: string; errors: string[]; output_folder: string;
+  }> {
+    const response = await this.bridge?.get_export_job?.(jobId);
+    if (typeof response !== 'string') throw new TypeError('Expected export job status JSON');
+    return JSON.parse(response);
+  }
+
+  public async controlExportJob(jobId: string, action: 'pause' | 'resume' | 'cancel') {
+    const response = await this.bridge?.control_export_job?.(jobId, action);
+    if (typeof response !== 'string') throw new TypeError('Expected export job control JSON');
+    return JSON.parse(response) as { status: string };
+  }
+
+  public async getProcessingCacheInfo(): Promise<Record<string, number>> {
+    const response = await this.bridge?.get_processing_cache_info?.();
+    if (typeof response !== 'string') return {};
+    return JSON.parse(response) as Record<string, number>;
+  }
+
+  public async clearProcessingCache(): Promise<void> {
+    await this.bridge?.clear_processing_cache?.();
+  }
+
+  public async hasLocalEnhancementModel(): Promise<boolean> {
+    const installed = await this.bridge?.has_local_enhancement_model?.();
+    return installed === true;
+  }
+
+  public async downloadLocalEnhancementModel(): Promise<'done' | 'cancelled'> {
+    const response = await this.bridge?.download_local_enhancement_model?.();
+    if (typeof response !== 'string') {
+      throw new TypeError('Expected JSON from local AI model download');
+    }
+    const result = JSON.parse(response) as {
+      ok: boolean;
+      error?: string;
+      cancelled?: boolean;
+    };
+    if (result.cancelled) return 'cancelled';
+    if (!result.ok) {
+      throw new Error(result.error ?? 'Could not download the local AI enhancement model');
+    }
+    return 'done';
+  }
+
+  public async cancelProcessing(): Promise<boolean> {
+    const response = await this.bridge?.cancel_processing?.();
+    return response === true;
+  }
+
+  public async getAppInfo(): Promise<AppInfo> {
+    const fallback: AppInfo = {
+      name: 'KuroLight',
+      tagline: 'Intelligent Visual Creation & Photo Editing Engine',
+      version: '1.0.0',
+      build: '2026.11',
+      release_channel: 'Desktop Production',
+      python_version: '3.13',
+      platform: navigator.platform || 'Windows (x64)',
+      architecture: 'x64',
+      config_path: '~/.config/KuroLight/config.json',
+      data_dir: '~/.local/share/KuroLight',
+      cache_dir: '~/.cache/KuroLight',
+      working_color_space: 'sRGB (Linear float32)',
+      max_cache_mb: 4096,
+      preview_max_edge: 2048,
+      gpu_enabled: true,
+      github_url: 'https://github.com/kuroLabs-ai/KuroLight',
+      discord_url: 'https://discord.gg/2pj9TuqWr',
+      docs_url: 'https://github.com/kuroLabs-ai/KuroLight#documentation',
+    };
+    if (!this.bridge?.get_app_info) {
+      return fallback;
+    }
+    try {
+      const response = await this.bridge.get_app_info();
+      if (typeof response === 'string') {
+        return JSON.parse(response) as AppInfo;
+      }
+      return (response as AppInfo) || fallback;
+    } catch (err) {
+      console.warn('Failed to get app info from bridge:', err);
+      return fallback;
+    }
+  }
+
+  public openExternalUrl(url: string): void {
+    if (this.bridge?.open_external_url) {
+      try {
+        void this.bridge.open_external_url(url);
+        return;
+      } catch (err) {
+        console.warn('Bridge failed to open url:', err);
+      }
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
+  public async getPreferences(): Promise<Preferences> {
+    const fallback: Preferences = {
+      performance: {
+        enable_gpu: true,
+        gpu_engine: 'auto',
+        selected_gpu_device: 'Auto-detect High Performance',
+        preview_max_edge: 2048,
+        preview_quality: 'balanced',
+        max_cache_mb: 4096,
+        vram_cache_mb: 2048,
+      },
+      storage: {
+        custom_cache_dir: '',
+        backup_schedule: 'on_exit',
+        backup_retention_count: 5,
+      },
+      import_settings: {
+        default_creator: '',
+        default_copyright: '© 2026 KuroLabs. All rights reserved.',
+        default_usage_terms: 'All rights reserved',
+        duplicate_detection: 'path',
+        auto_apply_preset: 'None',
+        raw_preview_priority: 'embedded_jpeg',
+      },
+      color_management: {
+        working_space: 'sRGB',
+        monitor_icc_profile: 'System Default',
+        soft_proofing_enabled: false,
+        gamut_warning_color: '#FF00FF',
+      },
+      local_ai: {
+        strict_offline: false,
+      },
+      appearance: {
+        theme: 'dark',
+        accent_color: '#0088FF',
+        ui_scale: 1.0,
+        startup_workspace: 'remember',
+        confirm_disk_deletion: true,
+        warn_discard_crop_edits: true,
+      },
+      external_editor: {
+        editor_path: '',
+        editor_name: 'Photoshop',
+        roundtrip_format: 'TIFF (16-bit)',
+      },
+    };
+    if (!this.bridge?.get_preferences) {
+      return fallback;
+    }
+    try {
+      const res = await this.bridge.get_preferences();
+      return typeof res === 'string' ? (JSON.parse(res) as Preferences) : (res as Preferences) || fallback;
+    } catch (err) {
+      console.warn('Could not load preferences from bridge, using fallback:', err);
+      return fallback;
+    }
+  }
+
+  public async savePreferences(prefs: Partial<Preferences>): Promise<Preferences> {
+    if (!this.bridge?.save_preferences) {
+      return this.getPreferences();
+    }
+    const res = await this.bridge.save_preferences(JSON.stringify(prefs));
+    return typeof res === 'string' ? (JSON.parse(res) as Preferences) : (res as Preferences);
+  }
+
+  public async getStorageStats(): Promise<StorageStats> {
+    const fallback: StorageStats = {
+      asset_count: 0,
+      db_size_bytes: 524288,
+      cache_size_bytes: 104857600,
+      cache_file_count: 142,
+      catalog_path: '~/.local/share/KuroLight/catalog.db',
+      cache_path: '~/.cache/KuroLight',
+    };
+    if (!this.bridge?.get_storage_stats) {
+      return fallback;
+    }
+    try {
+      const res = await this.bridge.get_storage_stats();
+      return typeof res === 'string' ? (JSON.parse(res) as StorageStats) : (res as StorageStats) || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  public async clearCache(): Promise<{ ok: boolean; freed_bytes: number }> {
+    if (!this.bridge?.clear_cache) {
+      return { ok: true, freed_bytes: 0 };
+    }
+    const res = await this.bridge.clear_cache();
+    return typeof res === 'string'
+      ? (JSON.parse(res) as { ok: boolean; freed_bytes: number })
+      : (res as { ok: boolean; freed_bytes: number });
+  }
+
+  public async optimizeDatabase(): Promise<{ ok: boolean; message?: string }> {
+    if (!this.bridge?.optimize_database) {
+      return { ok: true, message: 'Database optimized.' };
+    }
+    const res = await this.bridge.optimize_database();
+    return typeof res === 'string'
+      ? (JSON.parse(res) as { ok: boolean; message?: string })
+      : (res as { ok: boolean; message?: string });
+  }
+
+  public async backupCatalogNow(): Promise<{ ok: boolean; path?: string; error?: string }> {
+    if (!this.bridge?.backup_catalog_now) {
+      return { ok: true, path: 'catalog_backup.db' };
+    }
+    const res = await this.bridge.backup_catalog_now();
+    return typeof res === 'string'
+      ? (JSON.parse(res) as { ok: boolean; path?: string; error?: string })
+      : (res as { ok: boolean; path?: string; error?: string });
+  }
+
+  public async getLocalAIStatus(): Promise<{ models: LocalAIModelInfo[] }> {
+    const fallback: { models: LocalAIModelInfo[] } = {
+      models: [
+        {
+          id: 'realesrgan_x4',
+          name: 'Real-ESRGAN x4 Plus',
+          category: 'Super-Resolution & Denoise',
+          size_mb: 67,
+          is_installed: await this.hasLocalEnhancementModel(),
+          description: 'High-fidelity 4x image super-resolution with DirectML/CUDA GPU acceleration and CPU fallback.',
+        },
+        {
+          id: 'fast_denoise_ai',
+          name: 'Fast Denoise AI',
+          category: 'Noise Reduction',
+          size_mb: 34,
+          is_installed: false,
+          description: 'Deep learning color and luminance noise suppression for high ISO RAW files.',
+        },
+        {
+          id: 'segment_anything',
+          name: 'MobileSAM Subject Segmenter',
+          category: 'Segmentation & Masks',
+          size_mb: 40,
+          is_installed: false,
+          description: 'Real-time 1-click subject and foreground segmentation mask generator.',
+        },
+      ],
+    };
+    if (!this.bridge?.get_local_ai_status) {
+      return fallback;
+    }
+    try {
+      const res = await this.bridge.get_local_ai_status();
+      return typeof res === 'string'
+        ? (JSON.parse(res) as { models: LocalAIModelInfo[] })
+        : (res as { models: LocalAIModelInfo[] }) || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  public async deleteLocalAIModel(modelId: string): Promise<boolean> {
+    if (!this.bridge?.delete_local_ai_model) {
+      return true;
+    }
+    const res = await this.bridge.delete_local_ai_model(modelId);
+    const parsed = typeof res === 'string' ? JSON.parse(res) : res;
+    return (parsed as { ok?: boolean })?.ok === true;
+  }
+}
+
+export interface Preferences {
+  performance: {
+    enable_gpu: boolean;
+    gpu_engine: 'auto' | 'directml' | 'cuda' | 'cpu';
+    selected_gpu_device: string;
+    preview_max_edge: number;
+    preview_quality: 'draft' | 'balanced' | 'high_quality';
+    max_cache_mb: number;
+    vram_cache_mb: number;
+  };
+  storage: {
+    custom_cache_dir: string;
+    backup_schedule: 'never' | 'on_exit' | 'daily' | 'weekly';
+    backup_retention_count: number;
+  };
+  import_settings: {
+    default_creator: string;
+    default_copyright: string;
+    default_usage_terms: string;
+    duplicate_detection: 'path' | 'hash';
+    auto_apply_preset: string;
+    raw_preview_priority: 'embedded_jpeg' | 'full_raw';
+  };
+  color_management: {
+    working_space: 'sRGB' | 'Display P3' | 'Adobe RGB (1998)' | 'ProPhoto RGB';
+    monitor_icc_profile: string;
+    soft_proofing_enabled: boolean;
+    gamut_warning_color: string;
+  };
+  local_ai: {
+    strict_offline: boolean;
+  };
+  appearance: {
+    theme: string;
+    accent_color: string;
+    ui_scale: number;
+    startup_workspace: 'remember' | 'library' | 'develop' | 'color_studio' | 'visual_flow' | 'deliver';
+    confirm_disk_deletion: boolean;
+    warn_discard_crop_edits: boolean;
+  };
+  external_editor: {
+    editor_path: string;
+    editor_name: string;
+    roundtrip_format: string;
+  };
+}
+
+export interface StorageStats {
+  asset_count: number;
+  db_size_bytes: number;
+  cache_size_bytes: number;
+  cache_file_count: number;
+  catalog_path: string;
+  cache_path: string;
+}
+
+export interface LocalAIModelInfo {
+  id: string;
+  name: string;
+  category: string;
+  size_mb: number;
+  is_installed: boolean;
+  path?: string;
+  description: string;
+}
+
+export interface AppInfo {
+  name: string;
+  tagline: string;
+  version: string;
+  build: string;
+  release_channel: string;
+  python_version: string;
+  platform: string;
+  architecture: string;
+  config_path: string;
+  data_dir: string;
+  cache_dir: string;
+  working_color_space: string;
+  max_cache_mb: number;
+  preview_max_edge: number;
+  gpu_enabled: boolean;
+  github_url: string;
+  discord_url: string;
+  docs_url: string;
+}
+
+export const bridge = new PythonBridge();

@@ -1,0 +1,244 @@
+@config "../tailwind.config.js";
+@import "tailwindcss";
+
+:root {
+  --obsidian-accent: #0088ff;
+  --obsidian-accent-hover: #1a94ff;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+
+  body {
+    background-color: #0d0e11;
+    color: #f3f5f7;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+
+  :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), select, textarea) {
+    min-height: 32px;
+    border: 1px solid #2a2f38;
+    border-radius: 7px;
+    background-color: #0e1012;
+    padding: 6px 9px;
+    color: #f3f5f7;
+    color-scheme: dark;
+    font: inherit;
+    user-select: text;
+    transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+  }
+
+  :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), select, textarea)::placeholder {
+    color: #78808e;
+    opacity: 1;
+  }
+
+  :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), select, textarea):focus-visible {
+    outline: none;
+    border-color: var(--obsidian-accent, #0088ff);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--obsidian-accent, #0088ff) 25%, transparent);
+  }
+
+  :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), select, textarea):disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  input[type="checkbox"] {
+    appearance: none;
+    position: relative;
+    display: inline-flex;
+    width: 34px;
+    height: 19px;
+    flex: 0 0 auto;
+    align-items: center;
+    border: 1px solid #414754;
+    border-radius: 999px;
+    background: #252a32;
+    cursor: pointer;
+    transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+  }
+
+  input[type="checkbox"]::before {
+    width: 13px;
+    height: 13px;
+    margin-left: 2px;
+    border-radius: 50%;
+    background: #a9b1bf;
+    content: "";
+    transition: transform 140ms ease, background-color 140ms ease;
+  }
+
+  input[type="checkbox"]:checked {
+    border-color: var(--obsidian-accent, #168df3);
+    background: var(--obsidian-accent, #0876d1);
+  }
+
+  input[type="checkbox"]:checked::before {
+    background: #ffffff;
+    transform: translateX(15px);
+  }
+
+  input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--obsidian-accent, #49a8ff);
+    outline-offset: 2px;
+  }
+
+  input[type="checkbox"]:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  input[type="file"]::file-selector-button {
+    margin-right: 10px;
+    border: 1px solid #3c4250;
+    border-radius: 6px;
+    background: #22262e;
+    padding: 5px 9px;
+    color: #f3f5f7;
+    cursor: pointer;
+    transition: background-color 140ms ease;
+  }
+
+  input[type="file"]::file-selector-button:hover {
+    background: #303641;
+  }
+}
+
+@layer components {
+  .workspace-stage {
+    background: #0d0e11;
+  }
+
+  .lightbox-stage::before {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(20, 24, 31, 0.2), transparent 38%);
+    content: "";
+    pointer-events: none;
+  }
+
+  .app-surface {
+    background: #131518;
+    border: 1px solid #2a2f38;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  }
+
+  .app-control {
+    background: #181b20;
+    border: 1px solid #2a2f38;
+    transition:
+      background-color 140ms ease,
+      border-color 140ms ease,
+      color 140ms ease,
+      transform 140ms ease;
+  }
+
+  .app-control:hover:not(:disabled) {
+    background: #22262e;
+    border-color: #3c4250;
+  }
+
+  .app-accent {
+    background: var(--obsidian-accent, #0088ff);
+    border: 1px solid var(--obsidian-accent-hover, #2c9bff);
+  }
+}
+
+/* Custom sleek Obsidian scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2a2f38;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3c4250;
+}
+
+/* Range input slider styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  height: 20px;
+  touch-action: pan-y;
+}
+
+input[type="range"]:focus {
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  background: var(--range-track, #262932);
+  height: 6px;
+  border-radius: 999px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -5px;
+  background-color: #ffffff;
+  height: 16px;
+  width: 16px;
+  border-radius: 999px;
+  border: 2px solid var(--obsidian-accent, #0088ff);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--obsidian-accent, #0088ff) 18%, transparent);
+  transition: transform 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  background-color: var(--obsidian-accent, #0088ff);
+  border-color: #ffffff;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--obsidian-accent, #0088ff) 25%, transparent);
+  transform: scale(1.08);
+}
+
+input[type="range"]:active::-webkit-slider-thumb {
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--obsidian-accent, #0088ff) 30%, transparent);
+  transform: scale(1.12);
+}
+
+input[type="range"]::-moz-range-track {
+  background: var(--range-track, #262932);
+  height: 6px;
+  border-radius: 999px;
+}
+
+input[type="range"]::-moz-range-thumb {
+  background-color: #ffffff;
+  height: 12px;
+  width: 12px;
+  border-radius: 999px;
+  border: 2px solid var(--obsidian-accent, #0088ff);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--obsidian-accent, #0088ff) 18%, transparent);
+  transition: transform 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
