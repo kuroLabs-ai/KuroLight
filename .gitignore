@@ -61,3 +61,4 @@ Thumbs.db
 .kurolight/
 data/cache/
 data/projects/
+*.tsbuildinfo
