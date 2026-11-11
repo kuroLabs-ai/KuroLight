@@ -272,7 +272,7 @@ class SplashScreen(QWidget):
         p.setFont(badge_font)
         p.setPen(QColor(0x45, 0x4B, 0x54))
         ver_rect = QRectF(_W - _PAD - 60, logo_y, 60, 20)
-        p.drawText(ver_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop, "v0.1.0")
+        p.drawText(ver_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop, "v1.0.0")
 
     def _draw_divider(self, p: QPainter) -> None:
         """Thin 1px horizontal separator between brand and progress zone."""

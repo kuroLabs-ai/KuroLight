@@ -6,6 +6,7 @@ import { GalleryGrid } from './GalleryGrid';
 import { GalleryTable } from './GalleryTable';
 import { GalleryInspector } from './GalleryInspector';
 import { GalleryContextMenu } from './GalleryContextMenu';
+import { GalleryGridSkeleton, GalleryTableSkeleton } from './GallerySkeleton';
 import {
   matchesSmartCollectionRules,
   sourceFolderForPath,
@@ -815,9 +816,10 @@ export const GalleryWorkspace: React.FC<GalleryWorkspaceProps> = ({
         </div>
 
         {libraryLoading.loading && assets.length > 0 && (
-          <div className="flex items-center justify-between gap-3 border-b border-obsidian-border bg-obsidian-panel px-4 py-2 text-xs text-obsidian-textSec">
+          <div className="relative flex items-center justify-between gap-3 border-b border-obsidian-border bg-obsidian-panel/90 px-4 py-2 text-xs text-obsidian-textSec overflow-hidden">
+            <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-obsidian-accent to-transparent animate-shimmer" />
             <span className="flex items-center gap-2">
-              <Loader2 size={13} className="animate-spin text-obsidian-accent" />
+              <span className="h-1.5 w-1.5 rounded-full bg-obsidian-accent animate-pulse" />
               {libraryLoading.message}
             </span>
             {libraryLoading.cancellable && (
@@ -842,45 +844,12 @@ export const GalleryWorkspace: React.FC<GalleryWorkspaceProps> = ({
             onSetRating={(assetId, rating) => bridge.setRating(assetId, rating)}
             onSetFlag={(assetId, flag) => bridge.setFlag(assetId, flag)}
           />
-        ) : libraryLoading.loading && assets.length === 0 ? (
-          <div
-            className="flex-1 overflow-hidden p-5"
-            role="status"
-            aria-label={libraryLoading.message || 'Loading photo library'}
-            aria-busy="true"
-          >
-            <div className="mb-5 flex items-center justify-between">
-              <div className="h-4 w-36 animate-pulse rounded bg-obsidian-elevated" />
-              <div className="h-4 w-20 animate-pulse rounded bg-obsidian-elevated" />
-            </div>
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-              {Array.from({ length: 10 }, (_, index) => (
-                <div key={index} className="animate-pulse">
-                  <div className="aspect-[4/3] rounded-lg border border-obsidian-border bg-obsidian-card" />
-                  <div className="mt-2 h-3 w-3/4 rounded bg-obsidian-elevated" />
-                  <div className="mt-2 h-2.5 w-1/2 rounded bg-obsidian-elevated" />
-                </div>
-              ))}
-            </div>
-            <div className="mt-6 flex items-center justify-center gap-2 text-xs text-obsidian-textMut">
-              <Loader2 size={14} className="animate-spin text-obsidian-accent" />
-              <span>{libraryLoading.message}</span>
-              {libraryLoading.cancellable && (
-                <button
-                  type="button"
-                  onClick={onCancelImport}
-                  className="ml-2 rounded border border-obsidian-border px-2 py-1 text-obsidian-textSec hover:bg-obsidian-hover hover:text-white"
-                >
-                  Cancel import
-                </button>
-              )}
-            </div>
-          </div>
-        ) : usesNativePages && pageLoading && galleryAssets.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center gap-2 text-xs text-obsidian-textMut" role="status">
-            <Loader2 size={14} className="animate-spin text-obsidian-accent" />
-            Loading photos…
-          </div>
+        ) : ((libraryLoading.loading && assets.length === 0) || (usesNativePages && pageLoading && galleryAssets.length === 0)) ? (
+          viewMode === 'grid' ? (
+            <GalleryGridSkeleton count={12} />
+          ) : (
+            <GalleryTableSkeleton count={10} />
+          )
         ) : usesNativePages && pageError && galleryAssets.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
             <p className="text-sm text-red-300">Could not load photos: {pageError}</p>

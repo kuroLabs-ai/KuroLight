@@ -1888,7 +1888,10 @@ export const VisualFlowWorkspace: React.FC<VisualFlowWorkspaceProps> = ({
                         {imageUrl ? (
                           <img src={imageUrl} alt="" className="w-full h-full object-cover" />
                         ) : (
-                          <ImageIcon size={28} className="text-obsidian-textMut/30" />
+                          <div className="relative w-full h-full flex items-center justify-center bg-obsidian-surface/60 overflow-hidden">
+                            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.08] to-transparent animate-shimmer" />
+                            <ImageIcon size={28} className="text-obsidian-textMut/30 relative z-10" />
+                          </div>
                         )}
                         <span className="absolute bottom-1 right-1.5 px-1.5 py-0.5 rounded bg-black/70 text-[8.5px] font-mono text-emerald-400 font-bold">
                           PROCESSED

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Collection, SmartCollectionRules } from '../../types';
 import { bridge } from '../../bridge';
+import { GallerySidebarFolderSkeleton } from './GallerySkeleton';
 import { 
   Images, 
   Folder, 
@@ -536,9 +537,7 @@ export const GallerySidebar: React.FC<GallerySidebarProps> = ({
             </button>
           )}
           {sourceFoldersLoading && sourceFolders.length === 0 && (
-            <p className="px-2.5 py-1 text-[10px] text-obsidian-textMut" role="status">
-              Loading source folders…
-            </p>
+            <GallerySidebarFolderSkeleton count={3} />
           )}
           {!sourceFoldersLoading && sourceFolders.length === 0 && !sourceFoldersError && (
             <p className="px-2.5 py-1 text-[10px] text-obsidian-textMut">

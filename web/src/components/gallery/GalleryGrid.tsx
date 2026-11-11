@@ -414,6 +414,23 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
             </div>
           );
         })}
+        {isLoadingMore && (
+          Array.from({ length: Math.min(6, remainingAssetCount || 6) }, (_, i) => (
+            <div
+              key={`more-skel-${i}`}
+              className="flex flex-col overflow-hidden rounded-lg border border-obsidian-border bg-obsidian-card"
+            >
+              <div className="relative flex aspect-[4/3] w-full items-center justify-center overflow-hidden bg-obsidian-deep">
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.06] to-transparent animate-shimmer" />
+              </div>
+              <div className="flex flex-col gap-1.5 bg-obsidian-card/60 p-2.5">
+                <div className="relative h-3 w-3/4 overflow-hidden rounded bg-obsidian-elevated/70">
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.06] to-transparent animate-shimmer" />
+                </div>
+              </div>
+            </div>
+          ))
+        )}
         {bottomSpacerHeight > 0 && (
           <div aria-hidden="true" style={{ height: bottomSpacerHeight, gridColumn: '1 / -1' }} />
         )}
@@ -428,7 +445,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
               disabled={isLoadingMore}
               className="flex items-center gap-2 rounded-md border border-obsidian-border bg-obsidian-card px-4 py-2 text-xs font-medium text-obsidian-textSec transition-colors hover:bg-obsidian-elevated hover:text-white disabled:cursor-wait disabled:opacity-60"
             >
-              {isLoadingMore && <Loader2 size={13} className="animate-spin" />}
+              {isLoadingMore && <span className="h-2 w-2 rounded-full bg-obsidian-accent animate-pulse" />}
               {loadMoreError ? 'Retry loading photos' : isLoadingMore ? 'Loading photos…' : 'Load more photos'}
               <span className="text-obsidian-textMut">
                 ({remainingAssetCount.toLocaleString()} remaining)

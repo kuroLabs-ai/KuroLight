@@ -192,7 +192,7 @@ export const GalleryTable: React.FC<GalleryTableProps> = ({
               disabled={isLoadingMore}
               className="flex items-center gap-2 rounded-md border border-obsidian-border bg-obsidian-card px-4 py-2 text-xs font-medium text-obsidian-textSec transition-colors hover:bg-obsidian-elevated hover:text-white disabled:cursor-wait disabled:opacity-60"
             >
-              {isLoadingMore && <Loader2 size={13} className="animate-spin" />}
+              {isLoadingMore && <span className="h-2 w-2 rounded-full bg-obsidian-accent animate-pulse" />}
               {loadMoreError ? 'Retry loading photos' : isLoadingMore ? 'Loading photos…' : 'Load more photos'}
               <span className="text-obsidian-textMut">
                 ({remainingAssetCount.toLocaleString()} remaining)

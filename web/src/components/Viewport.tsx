@@ -254,24 +254,30 @@ export const Viewport: React.FC<ViewportProps> = ({
   const hasFitRef = useRef(false);
   const lastAssetIdRef = useRef<string | undefined>(activeAssetId);
   const [imgTick, setImgTick] = useState(0);
+  const [isImageLoading, setIsImageLoading] = useState<boolean>(!imageUrl && Boolean(activeAssetId));
 
   // When active photo changes, reset fit flag so new photo fits to view
   useEffect(() => {
     if (activeAssetId && activeAssetId !== lastAssetIdRef.current) {
       lastAssetIdRef.current = activeAssetId;
       hasFitRef.current = false;
+      setIsImageLoading(true);
     }
   }, [activeAssetId]);
 
   // Load preview image smoothly using img.decode() before swapping buffer (zero black flash)
   useEffect(() => {
-    if (!imageUrl) return;
+    if (!imageUrl) {
+      if (activeAssetId) setIsImageLoading(true);
+      return;
+    }
     let cancelled = false;
     const img = new Image();
 
     const commitImage = () => {
       if (cancelled) return;
       imgRef.current = img;
+      setIsImageLoading(false);
       if (!hasFitRef.current) {
         hasFitRef.current = true;
         fitToView();
@@ -291,7 +297,7 @@ export const Viewport: React.FC<ViewportProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [imageUrl, fitToView]);
+  }, [imageUrl, activeAssetId, fitToView]);
 
   useEffect(() => {
     if (!beforeImageUrl) return;
@@ -1487,6 +1493,49 @@ export const Viewport: React.FC<ViewportProps> = ({
       className={`flex-1 h-full relative bg-obsidian-deep overflow-hidden select-none ${getCanvasCursor()}`}
     >
       <canvas ref={canvasRef} className="w-full h-full block" />
+
+      {/* ── Viewport Skeleton Loading ── */}
+      {isImageLoading && activeAssetId && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center p-6 pointer-events-none bg-obsidian-deep/80 backdrop-blur-[2px] transition-opacity duration-200">
+          <div
+            className="relative overflow-hidden rounded-xl border border-obsidian-border bg-obsidian-card shadow-2xl flex flex-col items-center justify-center"
+            style={{
+              width: dimensions?.width && dimensions?.height
+                ? `min(76vw, ${Math.max(340, Math.min(880, (dimensions.width / dimensions.height) * 520))}px)`
+                : 'min(76vw, 700px)',
+              aspectRatio: dimensions?.width && dimensions?.height
+                ? `${dimensions.width} / ${dimensions.height}`
+                : '16 / 10',
+              maxHeight: '72vh',
+            }}
+          >
+            {/* Shimmer sweep animation */}
+            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.08] to-transparent animate-shimmer" />
+
+            {/* Inner silhouette and text */}
+            <div className="relative flex flex-col items-center gap-3.5 text-obsidian-textMut/40">
+              <div className="p-4 rounded-2xl bg-obsidian-elevated/40 border border-white/[0.04]">
+                <svg
+                  className="w-10 h-10 stroke-current"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  strokeWidth="1.2"
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="3" ry="3" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <polyline points="21 15 16 10 5 21" />
+                </svg>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-obsidian-accent animate-pulse" />
+                <span className="text-xs font-medium tracking-wide text-obsidian-textMut/70">
+                  Rendering photo preview…
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="app-surface absolute right-4 top-4 z-20 flex items-center space-x-1 rounded-xl p-1.5">
         {/* Crop Tool Quick Toggle Button */}

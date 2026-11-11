@@ -66,7 +66,7 @@ def run() -> int:
     _apply_obsidian_palette(app)
     app.setApplicationName("KuroLight")
     app.setOrganizationName("KuroLabs")
-    app.setApplicationVersion("0.1.0")
+    app.setApplicationVersion("1.0.0")
     icon_path = get_app_icon_path()
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))

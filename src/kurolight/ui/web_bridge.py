@@ -677,23 +677,28 @@ class PyBridge:
             return
 
         self._missing_source_notified.discard(asset.id)
-        try:
-            unedited = EditState(asset_id=asset.id)
-            before_buf = self.editing_service.render_preview(
-                asset.id, asset.source_path, unedited
-            )
-            before_url = self._buffer_to_data_url(before_buf)
-            self.before_image_updated.emit(before_url)
-        except Exception as exc:
-            logger.exception("Failed to render before preview for %s", asset.file_name)
-            self.notification.emit(
-                "Preview Failed",
-                f"Could not render the original preview for '{asset.file_name}': {exc}",
-                "error",
-            )
 
-        # Render active preview & histogram
+        # 1. Render active preview & histogram FIRST so user sees photo immediately without delay
         self._do_render_preview()
+
+        # 2. Render unedited 'Before' preview in background thread so it never blocks active photo display
+        def _render_before_async() -> None:
+            try:
+                unedited = EditState(asset_id=asset.id)
+                source_buf = self.editing_service.get_or_load_source_buffer(
+                    asset.id, asset.source_path
+                )
+                before_buf = self.editing_service.processor.process(source_buf, unedited)
+                before_url = self._buffer_to_data_url(before_buf)
+                self.before_image_updated.emit(before_url)
+            except Exception as exc:
+                logger.warning("Could not render before preview for %s: %s", asset.file_name, exc)
+
+        threading.Thread(
+            target=_render_before_async,
+            daemon=True,
+            name=f"before-preview-{asset.id}",
+        ).start()
 
     def open_in_develop(self, asset_id: str) -> None:
         """Selects asset and immediately transitions workspace to Lightbox (develop)."""
