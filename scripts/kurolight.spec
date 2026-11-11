@@ -1,10 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller specification file for KuroLight Desktop Application.
 
-Optimized for:
-1. Single standalone .exe (onefile mode).
-2. Minimal size by strictly excluding unused massive Qt modules (QtWebEngine, QtQml, QtQuick, Qt3D).
-3. NumPy 2.x full c-extension hook collection.
+Supports:
+1. Standalone Single-File Executable (onefile mode).
+2. Modular Directory Bundle (onefolder / onedir mode).
+3. Both targets concurrently in a single analysis pass (KUROLIGHT_BUILD_MODE=both).
+
+Optimized with:
+- Minimal bundle size: strictly excludes unused massive Qt modules (QtWebEngine, QtQml, QtQuick, Qt3D, etc.).
+- NumPy 2.x full c-extension hook collection.
+- Edge WebView2 pywebview integration.
 """
 
 import os
@@ -117,26 +122,62 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 
-# ONEFILE executable: All dependencies, Python runtime, and web assets bundled into a single file
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name="KuroLight",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,  # Windowed desktop application (no console window)
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=str(PROJECT_ROOT / "assets" / "icons" / "app.ico"),
-)
+build_mode = os.environ.get("KUROLIGHT_BUILD_MODE", "both").strip().lower()
+
+# 1. ONEFILE: Standalone single-file executable
+if build_mode in ("both", "onefile", "single"):
+    exe_onefile = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        [],
+        name="KuroLight_OneFile",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=False,  # Windowed desktop application (no console window)
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=str(PROJECT_ROOT / "assets" / "icons" / "app.ico"),
+    )
+
+# 2. ONEFOLDER (ONEDIR): Modular directory package with direct files
+if build_mode in ("both", "onefolder", "onedir", "folder"):
+    exe_onedir = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name="KuroLight",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=str(PROJECT_ROOT / "assets" / "icons" / "app.ico"),
+    )
+
+    coll = COLLECT(
+        exe_onedir,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        name="KuroLight",
+    )
+

@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Automated build script for KuroLight desktop application.
 
-Steps:
-1. Compiles React frontend to web/dist via Vite.
-2. Ensures multi-resolution app.ico exists from KuroLight-combined_vertical.png.
-3. Invokes PyInstaller to build standalone distribution in dist/KuroLight/.
-4. Verifies the output executable.
+Supports building:
+1. Standalone single-file executable (`dist/onefile/KuroLight.exe` and `dist/KuroLight.exe`).
+2. Modular directory bundle (`dist/onefolder/` and `dist/KuroLight/`).
+3. Both targets in a single unified workflow (default).
+
+Usage:
+    python scripts/build_exe.py                  # Builds both onefile and onefolder
+    python scripts/build_exe.py --mode onefile   # Builds only onefile executable
+    python scripts/build_exe.py --mode onefolder # Builds only onefolder directory
 """
 
+import argparse
 import os
 import shutil
 import subprocess
@@ -21,8 +26,11 @@ BUILD_DIR = ROOT_DIR / "build"
 WEB_DIR = ROOT_DIR / "web"
 ASSETS_DIR = ROOT_DIR / "assets" / "icons"
 
+DIST_ONEFILE_DIR = DIST_DIR / "onefile"
+DIST_ONEFOLDER_DIR = DIST_DIR / "onefolder"
 
-def ensure_app_icon():
+
+def ensure_app_icon() -> Path:
     """Generate multi-resolution app.ico from KuroLight-combined_vertical.png."""
     src_icon = ASSETS_DIR / "KuroLight-combined_vertical.png"
     if not src_icon.exists():
@@ -42,6 +50,7 @@ def ensure_app_icon():
         square.save(ico_path, format="ICO", sizes=sizes)
 
     print(f"      Created: {ico_path} ({ico_path.stat().st_size:,} bytes)")
+    return ico_path
 
 
 def build_frontend():
@@ -64,10 +73,13 @@ def build_frontend():
     print("      Frontend build complete (web/dist ready).")
 
 
-def build_executable():
-    """Run PyInstaller with kurolight.spec."""
-    print("[3/4] Running PyInstaller packaging...")
+def build_executable(mode: str = "both"):
+    """Run PyInstaller with kurolight.spec for the specified mode."""
+    print(f"[3/4] Running PyInstaller packaging (mode: {mode})...")
     spec_file = ROOT_DIR / "scripts" / "kurolight.spec"
+
+    env = os.environ.copy()
+    env["KUROLIGHT_BUILD_MODE"] = mode
 
     cmd = [
         sys.executable,
@@ -78,47 +90,106 @@ def build_executable():
         str(spec_file),
     ]
 
-    res = subprocess.run(cmd, cwd=ROOT_DIR)
+    res = subprocess.run(cmd, cwd=ROOT_DIR, env=env)
     if res.returncode != 0:
-        raise RuntimeError("PyInstaller build failed.")
+        raise RuntimeError(f"PyInstaller build failed for mode '{mode}'.")
 
-    exe_onefile = DIST_DIR / ("KuroLight.exe" if sys.platform == "win32" else "KuroLight")
-    exe_onedir = DIST_DIR / "KuroLight" / ("KuroLight.exe" if sys.platform == "win32" else "KuroLight")
-    if not exe_onefile.exists() and not exe_onedir.exists():
-        raise FileNotFoundError(f"Expected executable not found at {exe_onefile} or {exe_onedir}")
-
-    target_exe = exe_onefile if exe_onefile.exists() else exe_onedir
-    print(f"      Executable generated: {target_exe}")
+    # Organize outputs into standard layout
+    organize_distribution(mode)
 
 
-def verify_build():
-    """Verify built executable and assets."""
+def organize_distribution(mode: str):
+    """Normalize output paths so both dist/onefile and dist/onefolder are available."""
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
+    DIST_ONEFILE_DIR.mkdir(parents=True, exist_ok=True)
+
+    exe_suffix = ".exe" if sys.platform == "win32" else ""
+
+    # 1. Handle OneFile output
+    if mode in ("both", "onefile"):
+        src_onefile = DIST_DIR / f"KuroLight_OneFile{exe_suffix}"
+        target_onefile = DIST_ONEFILE_DIR / f"KuroLight{exe_suffix}"
+        root_onefile = DIST_DIR / f"KuroLight{exe_suffix}"
+
+        if src_onefile.exists():
+            shutil.copy2(src_onefile, target_onefile)
+            shutil.copy2(src_onefile, root_onefile)
+            src_onefile.unlink(missing_ok=True)
+        elif root_onefile.exists() and not target_onefile.exists():
+            shutil.copy2(root_onefile, target_onefile)
+
+    # 2. Handle OneFolder output
+    if mode in ("both", "onefolder"):
+        src_folder = DIST_DIR / "KuroLight"
+        if src_folder.exists() and src_folder.is_dir():
+            if DIST_ONEFOLDER_DIR.exists():
+                shutil.rmtree(DIST_ONEFOLDER_DIR)
+            shutil.copytree(src_folder, DIST_ONEFOLDER_DIR)
+
+
+def verify_build(mode: str = "both"):
+    """Verify built executables and directories."""
     print("[4/4] Verifying distribution bundle...")
-    exe_onefile = DIST_DIR / ("KuroLight.exe" if sys.platform == "win32" else "KuroLight")
-    bundle_dir = DIST_DIR / "KuroLight"
-    exe_onedir = bundle_dir / ("KuroLight.exe" if sys.platform == "win32" else "KuroLight")
+    exe_suffix = ".exe" if sys.platform == "win32" else ""
 
-    if exe_onefile.exists():
-        size_mb = exe_onefile.stat().st_size / (1024 * 1024)
-        print(f"\nSUCCESS: KuroLight standalone onefile executable ready!")
-        print(f"  Binary: {exe_onefile}")
-        print(f"  Size:   {size_mb:.1f} MB\n")
-    elif exe_onedir.exists():
-        total_size = sum(f.stat().st_size for f in bundle_dir.rglob("*") if f.is_file())
-        print(f"\nSUCCESS: KuroLight standalone folder bundle ready!")
-        print(f"  Location: {bundle_dir}")
-        print(f"  Binary:   {exe_onedir}")
-        print(f"  Size:     {total_size / (1024 * 1024):.1f} MB\n")
-    else:
-        raise FileNotFoundError("Neither single-file nor directory bundle was found in dist/")
+    onefile_exe = DIST_ONEFILE_DIR / f"KuroLight{exe_suffix}"
+    if not onefile_exe.exists():
+        onefile_exe = DIST_DIR / f"KuroLight{exe_suffix}"
+
+    onefolder_dir = DIST_ONEFOLDER_DIR if DIST_ONEFOLDER_DIR.exists() else (DIST_DIR / "KuroLight")
+    onefolder_exe = onefolder_dir / f"KuroLight{exe_suffix}"
+
+    print("\n" + "=" * 65)
+    print(" BUILD VERIFICATION SUMMARY")
+    print("=" * 65)
+
+    if mode in ("both", "onefile"):
+        if onefile_exe.exists():
+            size_mb = onefile_exe.stat().st_size / (1024 * 1024)
+            print(f"[✓] OneFile Executable:")
+            print(f"    Path: {onefile_exe}")
+            print(f"    Size: {size_mb:.2f} MB")
+        else:
+            raise FileNotFoundError(f"Expected OneFile executable not found at: {onefile_exe}")
+
+    if mode in ("both", "onefolder"):
+        if onefolder_exe.exists():
+            total_size = sum(f.stat().st_size for f in onefolder_dir.rglob("*") if f.is_file())
+            file_count = sum(1 for f in onefolder_dir.rglob("*") if f.is_file())
+            print(f"[✓] OneFolder Package (Open Directory / Fast Launch):")
+            print(f"    Directory: {onefolder_dir}")
+            print(f"    Binary:    {onefolder_exe}")
+            print(f"    Files:     {file_count} files ({total_size / (1024 * 1024):.2f} MB)")
+        else:
+            raise FileNotFoundError(f"Expected OneFolder binary not found at: {onefolder_exe}")
+
+    print("=" * 65 + "\n")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="KuroLight Application Packaging Script")
+    parser.add_argument(
+        "--mode",
+        choices=["both", "onefile", "onefolder"],
+        default="both",
+        help="Build target format: 'onefile' (single .exe), 'onefolder' (directory bundle), or 'both' (default)",
+    )
+    parser.add_argument(
+        "--skip-frontend",
+        action="store_true",
+        help="Skip recompiling the React frontend if already up to date",
+    )
+    return parser.parse_args()
 
 
 def main():
+    args = parse_args()
     try:
         ensure_app_icon()
-        build_frontend()
-        build_executable()
-        verify_build()
+        if not args.skip_frontend:
+            build_frontend()
+        build_executable(mode=args.mode)
+        verify_build(mode=args.mode)
     except Exception as exc:
         print(f"\nERROR: Build failed: {exc}", file=sys.stderr)
         sys.exit(1)

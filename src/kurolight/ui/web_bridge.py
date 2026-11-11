@@ -2325,10 +2325,12 @@ class PyBridge:
         if arr.shape[-1] == 4:
             encoded = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGRA)
             extension = ".png"
+            params = [int(cv2.IMWRITE_PNG_COMPRESSION), 1]
         else:
             encoded = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
             extension = ".jpg"
-        ok, enc = cv2.imencode(extension, encoded)
+            params = [int(cv2.IMWRITE_JPEG_QUALITY), 85, int(cv2.IMWRITE_JPEG_OPTIMIZE), 1]
+        ok, enc = cv2.imencode(extension, encoded, params)
         if not ok:
             return ""
         mime_type = "image/png" if extension == ".png" else "image/jpeg"

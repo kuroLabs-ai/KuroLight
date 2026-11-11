@@ -11,7 +11,7 @@ interface GalleryThumbnailProps {
 }
 
 // Module-level cache to make re-selecting assets instant
-const thumbnailCache = new Map<string, string>();
+export const thumbnailCache = new Map<string, string>();
 
 /**
  * Modern Skeleton Shimmer Placeholder for gallery thumbnails

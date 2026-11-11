@@ -192,6 +192,10 @@ export const App: React.FC = () => {
           setActiveHistoryIndex(-1);
           return;
         }
+        if (asset.id !== activeAssetRef.current?.id) {
+          setImageUrl('');
+          setBeforeImageUrl('');
+        }
         activeAssetRef.current = asset;
         setActiveAsset(asset);
         if (state) {

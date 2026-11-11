@@ -28,6 +28,8 @@ import type {
   MaskStroke,
   RetouchSpot,
 } from '../types';
+import { bridge } from '../bridge';
+import { thumbnailCache } from './gallery/GalleryThumbnail';
 
 export interface ViewportProps {
   imageUrl?: string;
@@ -256,19 +258,61 @@ export const Viewport: React.FC<ViewportProps> = ({
   const [imgTick, setImgTick] = useState(0);
   const [isImageLoading, setIsImageLoading] = useState<boolean>(!imageUrl && Boolean(activeAssetId));
 
-  // When active photo changes, reset fit flag so new photo fits to view
+  // When active photo changes, reset fit flag and IMMEDIATELY wipe old image so it never lingers
   useEffect(() => {
     if (activeAssetId && activeAssetId !== lastAssetIdRef.current) {
       lastAssetIdRef.current = activeAssetId;
       hasFitRef.current = false;
       setIsImageLoading(true);
-    }
-  }, [activeAssetId]);
 
-  // Load preview image smoothly using img.decode() before swapping buffer (zero black flash)
+      // 1. Wipe previous image immediately to prevent stale photo flash
+      imgRef.current = null;
+      beforeImgRef.current = null;
+      setImgTick((t) => t + 1);
+
+      // 2. Fast-path: Check thumbnail cache for instant zero-lag display
+      const cachedThumb = thumbnailCache.get(activeAssetId);
+      if (cachedThumb) {
+        const thumbImg = new Image();
+        thumbImg.onload = () => {
+          if (lastAssetIdRef.current === activeAssetId && !imgRef.current) {
+            imgRef.current = thumbImg;
+            if (!hasFitRef.current) {
+              hasFitRef.current = true;
+              fitToView();
+            }
+            setImgTick((t) => t + 1);
+          }
+        };
+        thumbImg.src = cachedThumb;
+      } else {
+        // Asynchronously fetch thumbnail as ultra-fast preview while high-res renders
+        bridge
+          .getThumbnail(activeAssetId)
+          .then((thumbUrl) => {
+            if (thumbUrl && lastAssetIdRef.current === activeAssetId && !imgRef.current) {
+              const thumbImg = new Image();
+              thumbImg.onload = () => {
+                if (lastAssetIdRef.current === activeAssetId && !imgRef.current) {
+                  imgRef.current = thumbImg;
+                  if (!hasFitRef.current) {
+                    hasFitRef.current = true;
+                    fitToView();
+                  }
+                  setImgTick((t) => t + 1);
+                }
+              };
+              thumbImg.src = thumbUrl;
+            }
+          })
+          .catch(() => {});
+      }
+    }
+  }, [activeAssetId, fitToView]);
+
+  // Load preview image smoothly using img.decode() before swapping buffer
   useEffect(() => {
     if (!imageUrl) {
-      if (activeAssetId) setIsImageLoading(true);
       return;
     }
     let cancelled = false;
@@ -297,7 +341,7 @@ export const Viewport: React.FC<ViewportProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [imageUrl, activeAssetId, fitToView]);
+  }, [imageUrl, fitToView]);
 
   useEffect(() => {
     if (!beforeImageUrl) return;
@@ -1495,7 +1539,7 @@ export const Viewport: React.FC<ViewportProps> = ({
       <canvas ref={canvasRef} className="w-full h-full block" />
 
       {/* ── Viewport Skeleton Loading ── */}
-      {isImageLoading && activeAssetId && (
+      {isImageLoading && activeAssetId && !imgRef.current && (
         <div className="absolute inset-0 z-10 flex items-center justify-center p-6 pointer-events-none bg-obsidian-deep/80 backdrop-blur-[2px] transition-opacity duration-200">
           <div
             className="relative overflow-hidden rounded-xl border border-obsidian-border bg-obsidian-card shadow-2xl flex flex-col items-center justify-center"
@@ -1534,6 +1578,14 @@ export const Viewport: React.FC<ViewportProps> = ({
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Mini indicator when displaying instant preview while high-res renders in background */}
+      {isImageLoading && activeAssetId && Boolean(imgRef.current) && (
+        <div className="absolute left-4 top-4 z-20 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-obsidian-panel/80 backdrop-blur border border-obsidian-border text-[11px] text-obsidian-textSec shadow-lg pointer-events-none">
+          <span className="w-1.5 h-1.5 rounded-full bg-obsidian-accent animate-pulse" />
+          <span>Enhancing resolution…</span>
         </div>
       )}
 
