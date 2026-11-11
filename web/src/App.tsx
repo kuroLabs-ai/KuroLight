@@ -52,6 +52,7 @@ const DEFAULT_EDIT_STATE: EditState = {
 
 export const App: React.FC = () => {
   const [workspace, setWorkspace] = useState<WorkspaceId>('library');
+  const [gallerySelectedAssetId, setGallerySelectedAssetId] = useState<string | null>(null);
   const [assets, setAssets] = useState<ImageAsset[]>([]);
   const [assetCount, setAssetCount] = useState(0);
   const [trashCount, setTrashCount] = useState(0);
@@ -277,6 +278,14 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('wheel', handleGlobalWheel);
   }, []);
 
+  const handleWorkspaceChange = useCallback((nextWs: WorkspaceId) => {
+    setWorkspace(nextWs);
+    bridge.switchWorkspace(nextWs);
+    if (nextWs !== 'library' && gallerySelectedAssetId && gallerySelectedAssetId !== activeAsset?.id) {
+      bridge.selectAsset(gallerySelectedAssetId);
+    }
+  }, [gallerySelectedAssetId, activeAsset?.id]);
+
   // ── Global Keyboard Shortcuts ──────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -304,8 +313,7 @@ export const App: React.FC = () => {
         const next = workspaceIds[nextWorkspace];
         if (next) {
           e.preventDefault();
-          setWorkspace(next);
-          bridge.switchWorkspace(next);
+          handleWorkspaceChange(next);
         }
       } else if (action.startsWith('gallery_')) {
         e.preventDefault();
@@ -367,6 +375,7 @@ export const App: React.FC = () => {
     isSettingsOpen,
     toggleRightPanelCollapse,
     workspace,
+    handleWorkspaceChange,
   ]);
 
   // ── Handlers ───────────────────────────────────────────────────────
@@ -435,7 +444,7 @@ export const App: React.FC = () => {
       {/* Top Bar */}
       <TopBar
         currentWorkspace={workspace}
-        onWorkspaceChange={(ws) => { setWorkspace(ws); bridge.switchWorkspace(ws); }}
+        onWorkspaceChange={handleWorkspaceChange}
         canUndo={activeHistoryIndex >= 0}
         canRedo={activeHistoryIndex < historyList.length - 1}
         onUndo={() => bridge.undo()}
@@ -547,7 +556,12 @@ export const App: React.FC = () => {
             collections={collections}
             activeCollectionId={activeCollectionId}
             onActiveCollectionChange={setActiveCollectionId}
-            onOpenInLightbox={(assetId) => { bridge.openInDevelop(assetId); setWorkspace('develop'); }}
+            onSelectedAssetChange={setGallerySelectedAssetId}
+            onOpenInLightbox={(assetId) => {
+              setGallerySelectedAssetId(assetId);
+              bridge.openInDevelop(assetId);
+              setWorkspace('develop');
+            }}
           />
         )}
 

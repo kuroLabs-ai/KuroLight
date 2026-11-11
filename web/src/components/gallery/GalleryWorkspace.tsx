@@ -55,6 +55,7 @@ interface GalleryWorkspaceProps {
   activeCollectionId: string | null;
   onActiveCollectionChange: (id: string | null) => void;
   onOpenInLightbox: (id: string) => void;
+  onSelectedAssetChange?: (id: string | null) => void;
 }
 
 export const GalleryWorkspace: React.FC<GalleryWorkspaceProps> = ({
@@ -68,6 +69,7 @@ export const GalleryWorkspace: React.FC<GalleryWorkspaceProps> = ({
   activeCollectionId,
   onActiveCollectionChange,
   onOpenInLightbox,
+  onSelectedAssetChange,
 }) => {
   // ── Panel Resize States ──
   const {
@@ -439,7 +441,7 @@ export const GalleryWorkspace: React.FC<GalleryWorkspaceProps> = ({
         }
         setSelectedAssetIds(rangeIds);
         setLastSelectedId(asset.id);
-        if (!isTrashView) bridge.selectAsset(asset.id);
+        onSelectedAssetChange?.(asset.id);
         return;
       }
     }
@@ -453,11 +455,11 @@ export const GalleryWorkspace: React.FC<GalleryWorkspaceProps> = ({
       }
       setSelectedAssetIds(next);
       setLastSelectedId(asset.id);
-      if (!isTrashView) bridge.selectAsset(asset.id);
+      onSelectedAssetChange?.(next.size > 0 ? asset.id : null);
     } else {
       setSelectedAssetIds(new Set([asset.id]));
       setLastSelectedId(asset.id);
-      if (!isTrashView) bridge.selectAsset(asset.id);
+      onSelectedAssetChange?.(asset.id);
     }
   };
 
@@ -468,12 +470,16 @@ export const GalleryWorkspace: React.FC<GalleryWorkspaceProps> = ({
     }
     const all = new Set(allFilteredAssetIds);
     setSelectedAssetIds(all);
-  }, [allFilteredAssetIds, assetIdsError]);
+    if (allFilteredAssetIds.length > 0) {
+      onSelectedAssetChange?.(allFilteredAssetIds[0]);
+    }
+  }, [allFilteredAssetIds, assetIdsError, onSelectedAssetChange]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedAssetIds(new Set());
     setLastSelectedId(null);
-  }, []);
+    onSelectedAssetChange?.(null);
+  }, [onSelectedAssetChange]);
 
   const handleRemoveComparisonAsset = (assetId: string) => {
     const next = comparisonAssetIds.filter((id) => id !== assetId);
@@ -555,7 +561,7 @@ export const GalleryWorkspace: React.FC<GalleryWorkspaceProps> = ({
     if (!selectedAssetIds.has(asset.id)) {
       setSelectedAssetIds(new Set([asset.id]));
       setLastSelectedId(asset.id);
-      if (!isTrashView) bridge.selectAsset(asset.id);
+      onSelectedAssetChange?.(asset.id);
     }
     setContextMenu({
       x: e.clientX,

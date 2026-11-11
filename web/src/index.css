@@ -6,6 +6,19 @@
   --obsidian-accent-hover: #1a94ff;
 }
 
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 1.8s infinite ease-in-out;
+}
+
 @layer base {
   * {
     box-sizing: border-box;
