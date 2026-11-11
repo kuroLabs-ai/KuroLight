@@ -29,7 +29,6 @@ UninstallDisplayName={#MyAppName} {#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-WizardResizable=yes
 OutputDir=..\dist\installer
 OutputBaseFilename=KuroLight_Professional_Setup_v{#MyAppVersion}
 
@@ -62,9 +61,9 @@ Name: "mode_folder";  Description: "Full Folder Package (Fastest launch speed, u
 Name: "mode_onefile"; Description: "Single Standalone Executable (Compact single file KuroLight.exe)";      Types: onefile;   Flags: exclusive
 
 [Tasks]
-Name: "desktopicon";   Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkable
-Name: "startmenuicon"; Description: "Create Start Menu shortcut"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkable
-Name: "fileassoc";     Description: "Associate KuroLight Project files (.kurolight, .klproj)"; GroupDescription: "File Associations:"; Flags: checkable
+Name: "desktopicon";   Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "startmenuicon"; Description: "Create Start Menu shortcut"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "fileassoc";     Description: "Associate KuroLight Project files (.kurolight, .klproj)"; GroupDescription: "File Associations:"
 
 [Files]
 ; Mode 1: Directory Package (Fast launch / open files)
