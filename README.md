@@ -4,7 +4,7 @@
 
 ### Intelligent Visual Creation & Non-Destructive Photographic Studio
 
-A modern, high-performance photo library and raw development workstation.<br/>
+A modern, high-performance desktop photo library and raw development workstation.<br/>
 Original master files remain pristine while adjustments are rendered in real time through an accelerated 32-bit floating-point processing graph.
 
 [![Version](https://img.shields.io/badge/version-1.0.0-25C7FF?style=for-the-badge&logo=semver&logoColor=white)](pyproject.toml)
@@ -12,7 +12,7 @@ Original master files remain pristine while adjustments are rendered in real tim
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)](web/package.json)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](web/package.json)
 [![DirectML](https://img.shields.io/badge/DirectML-Accelerated-0078D4?style=for-the-badge&logo=windows&logoColor=white)](src/kurolight/processing/enhancement.py)
-[![Tests](https://img.shields.io/badge/Tests-308%20Passing-10B981?style=for-the-badge&logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-310%20Passing-10B981?style=for-the-badge&logo=pytest&logoColor=white)](tests/)
 [![License](https://img.shields.io/badge/License-Proprietary-64748B?style=for-the-badge)](pyproject.toml)
 
 <p align="center">
@@ -22,6 +22,7 @@ Original master files remain pristine while adjustments are rendered in real tim
   <a href="#-color-fidelity--icc-profiles">Color Science</a> •
   <a href="#-presets-catalog">54 Presets</a> •
   <a href="#-architecture">Architecture</a> •
+  <a href="#-packaging--installer">Packaging</a> •
   <a href="#-keyboard-shortcuts">Shortcuts</a> •
   <a href="#-documentation-hub">Docs</a>
 </p>
@@ -55,12 +56,18 @@ Every edit—from basic exposure and white balance to complex 3-way color gradin
 │ profiles guarantee    │ cinematic grades, landscape │ exporting with token  │
 │ exact mobile/WhatsApp │ & monochrome recipes with   │ templates, watermarks,│
 │ color consistency.    │ instant search & filtering. │ and pause/resume.     │
+├───────────────────────┼─────────────────────────────┼───────────────────────┤
+│ ⚡ Zero-Lag Culling   │ ✨ Skeleton Shimmer UI      │ 🚀 Standalone Deploy  │
+│ Decoupled selection   │ Modern skeleton placeholders│ Single-file portable  │
+│ and instant thumbnail │ across gallery grid, tree,  │ .exe & Inno Setup     │
+│ preview caching.      │ inspector, and viewport.    │ full Windows installer│
 └───────────────────────┴─────────────────────────────┴───────────────────────┘
 ```
 
 - **Zero Data Loss Guarantee**: All edits, snapshots, ratings, flags, and undo histories survive app restarts and are preserved even in Recently Deleted trash.
 - **Privacy-First Design**: Photos stay local on your machine. Cloud AI connections are strictly opt-in and gated by explicit disclosure; credentials live solely in your operating system's secure keychain.
-- **Cross-Platform Ready**: Architected with strict path normalization, directory traversal defense, and hardware execution provider abstraction across Windows, macOS, and Linux.
+- **Ultra-Fast Zero-Lag Workflow**: Photo selection is decoupled from heavy rendering pipelines; selecting a photo in the library updates metadata instantly, while the Lightbox utilizes instant thumbnail pre-caching for 0ms transitions.
+- **Cross-Platform Ready**: Architected with strict path normalization, directory traversal defense, native Windows file dialog integration, and hardware execution provider abstraction.
 
 ---
 
@@ -94,15 +101,17 @@ KuroLight provides five dedicated, task-focused workspaces accessible via the to
 
 ### 1. 🖼️ Gallery (`Alt+1`)
 *The photographic library, organization, and culling hub.*
-- **Virtualized Grid & Table Views**: Smoothly handles thousands of assets with lazy thumbnail decoding.
-- **Folder & Album Navigation**: Filter catalog by filesystem directory representation or custom nested collections.
+- **Skeleton Shimmer Placeholders**: Fluid animated card skeletons during initial loading and pagination.
+- **Decoupled Fast Selection**: Single-clicking photos selects them instantly for EXIF inspection without blocking the engine; double-clicking or switching tabs seamlessly loads full development.
+- **Folder & Album Navigation**: Filter catalog by filesystem directory representation or custom nested collections with shimmering folder placeholders.
 - **Smart Collections**: Dynamically aggregate assets matching text search queries, star ratings (0–5), pick/reject flags, and source folders.
 - **Compare & Survey**: Inspect 2 loaded images side-by-side or survey 2–4 candidates simultaneously with shared zoom and per-photo culling hotkeys.
-- **Metadata Inspector**: View EXIF capture data (camera, lens, shutter, aperture, ISO) and edit catalog metadata (title, caption, keywords, copyright).
+- **Metadata Inspector**: View EXIF capture data (camera, lens, shutter, aperture, ISO, exposure compensation) with centered aspect-fit preview and metadata editor.
 - **Indefinite Recoverable Trash**: Soft-delete catalog records without touching original files on disk; restore anytime or confirm permanent removal.
 
 ### 2. 💡 Lightbox (`Alt+2`)
 *The primary photographic development and adjustment darkroom.*
+- **Zero-Lag Viewport Transitions**: Instant thumbnail fast-path cache displays new photos immediately (0ms) while high-res 2048px renders enhance seamlessly in the background.
 - **Global Tone & Exposure**: Exposure ($\pm 5\text{ EV}$), Contrast, Highlights, Shadows, Whites, and Blacks.
 - **White Balance & Color**: Color Temperature, Tint, Vibrance, and Saturation.
 - **Detail & Texture**: Unsharp masking, bilateral noise reduction, texture, high-pass clarity, and atmospheric dehaze.
@@ -138,7 +147,11 @@ KuroLight provides five dedicated, task-focused workspaces accessible via the to
 KuroLight features a dynamic design system powered by CSS custom properties (`--obsidian-accent`):
 * **Live Studio Swatches**: Instantly toggle between Sapphire Blue, Emerald Green, Amber Gold, Crimson Red, Amethyst Purple, and Silver.
 * **Custom Hex Picker**: Choose any custom brand color in **Settings (`Ctrl+,`) → Appearance**; changes apply immediately without reloading.
-* **Unified Iconography**: Native high-resolution logo and multi-size favicons embedded across window titlebars, splash screen, and browser views.
+* **Unified Iconography & Branding**:
+  * Multi-resolution `.exe` & installer icon compiled from `assets/icons/KuroLight-combined_vertical.png`.
+  * In-app window icon set to `assets/icons/logo.png`.
+  * Watermark export logo set to `assets/icons/KuroLight-combined_vertical.png`.
+* **Drag-Resizable Panels**: Interactive resize handles with double-click reset on AI Sidebar (300px–640px), Gallery Sidebar (180px–460px), and Metadata Inspector (220px–520px).
 
 ---
 
@@ -171,7 +184,8 @@ flowchart TD
 ```
 
 ### 1. Kuro AI Assistant (Cloud Vision)
-- **Supported Providers**: Google Gemini (Gemini 2.5 Flash), OpenAI (GPT-4o / GPT-4o mini), and Anthropic (Claude 3.7 Sonnet).
+- **Modern Minimalist UI**: Sleek pill-style auto-expanding textarea, circular action button, and suggestion chips.
+- **Supported Providers**: Google Gemini (Gemini 2.5 Flash), OpenAI (GPT-4o / GPT-4o mini), Anthropic (Claude 3.7 Sonnet), Ollama (Local), and OpenRouter.
 - **OS Keychain Security**: API keys are saved exclusively in the operating system credential store (Windows Credential Locker, macOS Keychain, Linux Secret Service).
 - **Strict User Approval**: Kuro AI cannot apply edits directly. Every proposal must be approved after side-by-side visual review.
 
@@ -202,6 +216,33 @@ flowchart TD
 │  • Background ThreadPool Batch Export Manager                          │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 📦 Packaging & Installer
+
+KuroLight provides automated packaging tooling for producing standalone executables and Windows setup installers:
+
+### 1. Build Executable (`build_exe.py`)
+Generates standalone distributions using PyInstaller with stripped unused Qt modules, NumPy 2.x C-extension dynamic collection, and native file dialog hooks:
+```bash
+# Build both OneFile executable and OneFolder directory package
+python scripts/build_exe.py
+
+# Or target a specific packaging mode
+python scripts/build_exe.py --mode onefile
+python scripts/build_exe.py --mode onefolder
+```
+Outputs are organized into:
+* `dist/onefile/KuroLight.exe` (Standalone portable single executable)
+* `dist/onefolder/` (Fast startup unpacked directory distribution)
+
+### 2. Compile Windows Installer (`build_installer.py`)
+Generates a professional Inno Setup 7 installer (`KuroLight_Professional_Setup_v1.0.0.exe`) with LZMA2 ultra compression:
+```bash
+python scripts/build_installer.py
+```
+* Integrates desktop shortcuts, start menu entries, uninstaller, and `.kurolight` / `.klproj` file associations.
 
 ---
 
@@ -306,7 +347,7 @@ python -m kurolight.run_gui --dev
 KuroLight maintains an automated testing suite with **100% test pass status**:
 
 ```bash
-# Run all 308 unit and integration tests
+# Run all 310 unit and integration tests
 pytest
 
 # Run tests with short progress summary
