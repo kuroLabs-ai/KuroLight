@@ -1,5 +1,5 @@
 import React, { useCallback, Suspense, lazy } from 'react';
-import { X } from 'lucide-react';
+import { Toaster } from 'sonner';
 import { TopBar, Filmstrip } from '@/components';
 import { GalleryPage, DevelopPage } from '@/pages';
 import {
@@ -55,8 +55,6 @@ export const App: React.FC = () => {
     assetCount,
     trashCount,
     libraryLoading,
-    notice,
-    setNotice,
     processingProgress,
     collections,
     activeCollectionId,
@@ -216,35 +214,7 @@ export const App: React.FC = () => {
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
-      {notice && (
-        <div
-          role={notice.level === 'error' ? 'alert' : 'status'}
-          className={`absolute right-4 top-16 z-[100] max-h-[45vh] w-[min(28rem,calc(100vw-2rem))] overflow-auto rounded-lg border bg-obsidian-panel p-4 shadow-xl ${
-            notice.level === 'error'
-              ? 'border-red-500/60'
-              : notice.level === 'warning'
-                ? 'border-amber-500/60'
-                : 'border-obsidian-border'
-          }`}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-white">{notice.title}</p>
-              <p className="mt-1 whitespace-pre-wrap break-words text-xs text-obsidian-textSec">
-                {notice.message}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setNotice(null)}
-              className="rounded p-1 text-obsidian-textMut hover:bg-obsidian-hover hover:text-white"
-              aria-label="Dismiss notification"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </div>
-      )}
+      <Toaster richColors position="top-right" theme="dark" closeButton />
 
       {processingProgress && (
         <div

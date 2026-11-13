@@ -3,3 +3,4 @@ export * from './smartCollections';
 export * from './theme';
 export * from './sort';
 export * from './format';
+export * from './cn';

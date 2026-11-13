@@ -1,4 +1,5 @@
 import { StateCreator } from 'zustand';
+import { toast } from 'sonner';
 import { AppState, NoticeState, ProcessingProgressState } from '@/interfaces/store';
 import { WorkspaceId } from '@/types';
 
@@ -33,6 +34,17 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set) => (
     })),
   setIsAIPopupOpen: (isAIPopupOpen) => set({ isAIPopupOpen }),
   setIsSettingsOpen: (isSettingsOpen) => set({ isSettingsOpen }),
-  setNotice: (notice) => set({ notice }),
+  setNotice: (notice) => {
+    set({ notice });
+    if (notice) {
+      if (notice.level === 'error') {
+        toast.error(notice.title, { description: notice.message });
+      } else if (notice.level === 'warning') {
+        toast.warning(notice.title, { description: notice.message });
+      } else {
+        toast.info(notice.title, { description: notice.message });
+      }
+    }
+  },
   setProcessingProgress: (processingProgress) => set({ processingProgress }),
 });
