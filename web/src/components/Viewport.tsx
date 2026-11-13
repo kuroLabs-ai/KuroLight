@@ -1,27 +1,24 @@
 /**
- * Viewport — The main photo canvas.
+ * Viewport — The main KuroLight photo canvas.
  *
- * Architecture:
- *  ┌─ TransformWrapper (react-zoom-pan-pinch) ─────────────────────────────┐
- *  │  ┌─ TransformComponent ──────────────────────────────────────────────┐│
- *  │  │  ┌─ Photo container (natural image px) ───────────────────────┐  ││
- *  │  │  │  [WebGL canvas — edited "after"]                           │  ││
- *  │  │  │  [<img>  — original "before"]  clipped by splitRatio       │  ││
- *  │  │  │  [Divider handle — draggable]                              │  ││
- *  │  │  └────────────────────────────────────────────────────────────┘  ││
- *  │  └───────────────────────────────────────────────────────────────────┘│
- *  └───────────────────────────────────────────────────────────────────────┘
+ * Zero external library dependency for zoom/pan/compare.
+ * Everything is built on raw pointer events, wheel events, and CSS transforms.
  *
- * Key design decisions:
- *  • The Before/After split divider lives INSIDE TransformComponent so the user
- *    can zoom to 100-400% and drag the divider without losing pan/zoom ability.
- *    (Matching behaviour of Lightroom, Capture One, Photoshop Camera Raw.)
- *  • The photo container is sized to the NATURAL image dimensions in CSS pixels.
- *    TransformWrapper uses initialScale to fit it into the viewport on load.
- *  • The WebGL canvas renders all photo adjustments at 60 FPS on the GPU.
- *    CSS filters are NOT used for colour grading (they lack precision).
- *  • Dragging the split handle calls e.stopPropagation() so it never triggers
- *    the TransformWrapper's pan listener.
+ * Layout:
+ *   stage (overflow:hidden)
+ *     └─ content div  ← CSS transform: translate(tx,ty) scale(s)  origin:0 0
+ *         └─ photo container (natural image pixels)
+ *             ├─ <canvas>  — WebGL "after" (edited)
+ *             ├─ <img>     — "before" (original), clipped by splitRatio
+ *             └─ split handle (draggable, stops propagation to stage)
+ *
+ * Zoom math:
+ *   Zoom centred on cursor: newTx = mx - (mx - tx) * (newScale / scale)
+ *   This keeps the pixel under the cursor fixed while everything else moves.
+ *
+ * Split compare:
+ *   The handle is in photo-pixel space. clipPath on the "before" img handles reveal.
+ *   Dragging the handle → stopPropagation → stage never sees the event → pan still works.
  */
 
 import React, {
@@ -31,16 +28,12 @@ import React, {
   useEffect,
   useMemo,
 } from 'react';
-import {
-  TransformWrapper,
-  TransformComponent,
-  type ReactZoomPanPinchRef,
-} from 'react-zoom-pan-pinch';
 import { useEditStore } from '@/stores/useAppStore';
 import { ViewportControls } from './viewport/ViewportControls';
 import { CropHUD } from './viewport/CropHUD';
 import { ZoomHUD } from './viewport/ZoomHUD';
 import { useLiveFilterCanvas } from './viewport/useLiveFilterCanvas';
+import { useZoomPan } from './viewport/useZoomPan';
 import {
   type GuideLineType,
   getNextOrientation,
@@ -87,23 +80,24 @@ export interface ViewportProps {
 
 // ─────────────────────────────────────────────
 // Before/After split handle
+// Lives in photo-pixel space (inside the photo container).
+// Dragging it adjusts splitRatio WITHOUT triggering stage pan.
 // ─────────────────────────────────────────────
 interface SplitHandleProps {
-  splitRatio: number; // 0.0 … 1.0
-  containerWidth: number;
-  onDrag: (newRatio: number) => void;
+  splitRatio: number;      // 0 … 1
+  photoWidth: number;      // natural photo width in px
+  onDrag: (r: number) => void;
 }
 
-const SplitHandle: React.FC<SplitHandleProps> = ({ splitRatio, containerWidth, onDrag }) => {
-  const handleRef = useRef<HTMLDivElement>(null);
-  const dragging  = useRef(false);
-  const startX    = useRef(0);
+const SplitHandle: React.FC<SplitHandleProps> = ({ splitRatio, photoWidth, onDrag }) => {
+  const handleRef  = useRef<HTMLDivElement>(null);
+  const dragging   = useRef(false);
+  const startX     = useRef(0);
   const startRatio = useRef(0);
 
   const onPointerDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      // Stop propagation so TransformWrapper doesn't interpret this as a pan
-      e.stopPropagation();
+    (e: React.PointerEvent) => {
+      e.stopPropagation(); // stop stage from starting a pan
       e.preventDefault();
       dragging.current   = true;
       startX.current     = e.clientX;
@@ -114,26 +108,39 @@ const SplitHandle: React.FC<SplitHandleProps> = ({ splitRatio, containerWidth, o
   );
 
   const onPointerMove = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!dragging.current || containerWidth <= 0) return;
+    (e: React.PointerEvent) => {
+      if (!dragging.current || photoWidth <= 0) return;
       e.stopPropagation();
-      const delta = e.clientX - startX.current;
-      const newRatio = Math.max(0.01, Math.min(0.99, startRatio.current + delta / containerWidth));
+      // e.movementX doesn't work reliably on all browsers when captured,
+      // so we compute delta from the original down position.
+      const dx = e.clientX - startX.current;
+      // Convert screen-space dx → photo-space dx by dividing by current CSS scale.
+      // The handle is already in photo-pixel space, so delta in photo pixels =
+      // screen delta / scale.  We read scale from the content el's transform.
+      const content = handleRef.current?.closest<HTMLElement>('.kl-content');
+      let screenScale = 1;
+      if (content) {
+        const m = new DOMMatrixReadOnly(getComputedStyle(content).transform);
+        screenScale = m.a; // scaleX
+      }
+      const photoDelta = dx / screenScale;
+      const newRatio = Math.max(0.02, Math.min(0.98, startRatio.current + photoDelta / photoWidth));
       onDrag(newRatio);
     },
-    [containerWidth, onDrag],
+    [photoWidth, onDrag],
   );
 
-  const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+  const onPointerUp = useCallback((e: React.PointerEvent) => {
     e.stopPropagation();
     dragging.current = false;
   }, []);
 
-  const xPx = splitRatio * containerWidth;
+  const xPx = splitRatio * photoWidth;
 
   return (
     <div
       ref={handleRef}
+      data-split-handle="1"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -144,35 +151,38 @@ const SplitHandle: React.FC<SplitHandleProps> = ({ splitRatio, containerWidth, o
         left: `${xPx}px`,
         width: '2px',
         height: '100%',
-        background: 'rgba(255,255,255,0.9)',
-        boxShadow: '0 0 6px rgba(0,0,0,0.6)',
+        background: 'rgba(255,255,255,0.90)',
+        boxShadow: '0 0 8px rgba(0,0,0,0.65)',
         cursor: 'ew-resize',
         zIndex: 20,
         touchAction: 'none',
         willChange: 'left',
+        transform: 'translateX(-50%)',
       }}
     >
-      {/* Circular drag knob */}
+      {/* Circular knob */}
       <div
         style={{
           position: 'absolute',
           top: '50%',
           left: '50%',
           transform: 'translate(-50%, -50%)',
-          width: '32px',
-          height: '32px',
+          width: '34px',
+          height: '34px',
           borderRadius: '50%',
           background: 'white',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+          boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           pointerEvents: 'none',
+          userSelect: 'none',
         }}
       >
-        {/* Left-right arrows */}
-        <svg width="16" height="10" viewBox="0 0 16 10" fill="none">
-          <path d="M4 5H12M12 5L9 2M12 5L9 8M4 5L7 2M4 5L7 8" stroke="#444" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        {/* ◄ ► arrows */}
+        <svg width="18" height="12" viewBox="0 0 18 12" fill="none">
+          <path d="M5 6H13M13 6L10 3M13 6L10 9M5 6L8 3M5 6L8 9"
+            stroke="#555" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
         </svg>
       </div>
     </div>
@@ -180,7 +190,7 @@ const SplitHandle: React.FC<SplitHandleProps> = ({ splitRatio, containerWidth, o
 };
 
 // ─────────────────────────────────────────────
-// Main Viewport component
+// Main Viewport
 // ─────────────────────────────────────────────
 export const Viewport: React.FC<ViewportProps> = ({
   imageUrl,
@@ -188,9 +198,7 @@ export const Viewport: React.FC<ViewportProps> = ({
   activeAssetId: _activeAssetId,
   dimensions,
   isCropActive = false,
-  cropRect: _cropRect = { x: 0, y: 0, w: 1, h: 1 },
   aspectRatio = 'Original',
-  onCropChange: _onCropChange,
   onApplyCrop,
   onCancelCrop,
   onResetCrop,
@@ -199,20 +207,15 @@ export const Viewport: React.FC<ViewportProps> = ({
   isFilmstripVisible = true,
   onToggleFilmstrip,
 }) => {
-  const transformRef = useRef<ReactZoomPanPinchRef | null>(null);
-  const canvasRef    = useRef<HTMLCanvasElement | null>(null);
-  const stageRef     = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Live edit state from Zustand (60 FPS reactive)
+  // Live edit state from Zustand
   const editState = useEditStore((state) => state.editState);
 
-  // Natural image dimensions (read from canvas after WebGL upload)
+  // Natural image dimensions (resolved by WebGL after image loads)
   const [imgDims, setImgDims] = useState<{ width: number; height: number } | undefined>(dimensions);
 
-  // Zoom scale for HUD readout
-  const [scale, setScale] = useState(1.0);
-
-  // Before/After compare mode
+  // Before/After compare
   const [isSplitView,  setIsSplitView]  = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
   const [splitRatio,   setSplitRatio]   = useState(0.5);
@@ -223,60 +226,30 @@ export const Viewport: React.FC<ViewportProps> = ({
 
   // ── WebGL live filter ──────────────────────────────────────────────────
   useLiveFilterCanvas({
-    imageSrc: imageUrl,
-    editState: showOriginal ? null : editState,   // null = neutral (all sliders 0)
+    imageSrc:  imageUrl,
+    editState: showOriginal ? null : editState,
     canvasRef,
     onDimensionsLoaded: setImgDims,
   });
 
-  // ── Compute initial scale to fit image into the stage ─────────────────
-  const [stageSize, setStageSize] = useState({ w: 800, h: 600 });
+  // ── Custom Zoom + Pan ─────────────────────────────────────────────────
+  const { stageRef, contentRef, state: zpState, fitToScreen, zoomTo100, zoomIn, zoomOut } =
+    useZoomPan({ photoDims: imgDims ?? null });
 
+  // ── Reset zoom whenever a new image is loaded ─────────────────────────
+  const prevImageUrl = useRef<string | undefined>(undefined);
   useEffect(() => {
-    const el = stageRef.current;
-    if (!el) return;
-    const obs = new ResizeObserver((entries) => {
-      const { width, height } = entries[0].contentRect;
-      setStageSize({ w: width, h: height });
-    });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
-
-  const fitScale = useMemo(() => {
-    if (!imgDims) return 1;
-    const padding = 48; // px breathing room on each side
-    const scaleW = (stageSize.w - padding * 2) / imgDims.width;
-    const scaleH = (stageSize.h - padding * 2) / imgDims.height;
-    return Math.min(scaleW, scaleH, 1); // never upscale beyond 1× on first load
-  }, [imgDims, stageSize]);
-
-  // Reset zoom whenever the image changes (new asset selected)
-  useEffect(() => {
-    if (imageUrl) {
-      // Brief delay so dimensions are loaded first
-      const id = setTimeout(() => transformRef.current?.resetTransform(0), 50);
-      return () => clearTimeout(id);
+    if (imageUrl && imageUrl !== prevImageUrl.current) {
+      prevImageUrl.current = imageUrl;
+      // fitToScreen will be triggered automatically by useZoomPan when imgDims change
     }
   }, [imageUrl]);
-
-  // ── Fit / 1:1 helpers ─────────────────────────────────────────────────
-  const handleFitToScreen = useCallback(() => {
-    transformRef.current?.resetTransform(220);
-  }, []);
-
-  const handleZoom100 = useCallback(() => {
-    if (!imgDims) return;
-    const targetScale = 1 / fitScale; // 1× natural pixel
-    transformRef.current?.setTransform(0, 0, targetScale, 220);
-  }, [imgDims, fitScale]);
 
   // ── Keyboard shortcuts ─────────────────────────────────────────────────
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA') return;
-
       if (e.key === '\\') {
         e.preventDefault();
         setIsSplitView((p) => !p);
@@ -287,29 +260,49 @@ export const Viewport: React.FC<ViewportProps> = ({
         e.preventDefault();
         if (e.shiftKey) setGuideOrientation((p) => getNextOrientation(p));
         else            setGuideType((p) => getNextGuideType(p));
+      } else if (e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        zoomIn();
+      } else if (e.key === '-') {
+        e.preventDefault();
+        zoomOut();
+      } else if (e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        fitToScreen();
       }
     };
     const up = (e: KeyboardEvent) => {
       if (e.key === ' ') setShowOriginal(false);
     };
     window.addEventListener('keydown', down);
-    window.addEventListener('keyup', up);
+    window.addEventListener('keyup',   up);
     return () => {
       window.removeEventListener('keydown', down);
-      window.removeEventListener('keyup', up);
+      window.removeEventListener('keyup',   up);
     };
-  }, []);
+  }, [zoomIn, zoomOut, fitToScreen]);
 
   // ── Photo container size ───────────────────────────────────────────────
   const photoW = imgDims?.width  ?? 1200;
   const photoH = imgDims?.height ?? 800;
+
+  // Label position for Before/After badges
+  const beforeBadgeRight = useMemo(
+    () => `${((1 - splitRatio) * 100).toFixed(1)}%`,
+    [splitRatio],
+  );
+  const afterBadgeLeft = useMemo(
+    () => `${(splitRatio * 100).toFixed(1)}%`,
+    [splitRatio],
+  );
 
   // ─────────────────────────────────────────────
   // Render
   // ─────────────────────────────────────────────
   return (
     <div className="relative flex flex-1 w-full h-full bg-obsidian-deep overflow-hidden select-none">
-      {/* ── Top Floating Toolbar ── */}
+
+      {/* ── Top Controls ── */}
       <ViewportControls
         isFilmstripVisible={isFilmstripVisible}
         onToggleFilmstrip={onToggleFilmstrip}
@@ -324,178 +317,183 @@ export const Viewport: React.FC<ViewportProps> = ({
         onSelectGuideType={setGuideType}
         guideOrientation={guideOrientation}
         onCycleGuideOrientation={() => setGuideOrientation((p) => getNextOrientation(p))}
-        onFitToScreen={handleFitToScreen}
-        onZoom100={handleZoom100}
+        onFitToScreen={() => fitToScreen()}
+        onZoom100={() => zoomTo100()}
       />
 
-      {/* ── Stage: zoom + pan container ── */}
+      {/* ── Stage: the visible clip area ── */}
       <div
         ref={stageRef}
-        className="relative w-full h-full flex items-center justify-center overflow-hidden"
+        className="relative w-full h-full overflow-hidden"
+        style={{ cursor: 'grab' }}
       >
         {!imageUrl ? (
-          /* Loading placeholder */
-          <div className="flex flex-col items-center justify-center text-obsidian-textMut gap-3">
+          /* Loading state */
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
             <div className="h-8 w-8 animate-spin rounded-full border-2 border-obsidian-border border-t-obsidian-accent" />
             <span className="text-xs font-medium text-obsidian-textSec">
               Loading photo preview…
             </span>
           </div>
         ) : (
-          /* ── TransformWrapper: single instance for BOTH single & split view ── */
-          <TransformWrapper
-            ref={transformRef}
-            initialScale={fitScale}
-            minScale={0.02}
-            maxScale={16}
-            centerOnInit
-            limitToBounds={false}
-            wheel={{ step: 0.08 }}
-            doubleClick={{ mode: 'toggle', step: 1.0 }}
-            panning={{ excluded: ['split-handle'] }}
-            onTransform={(_ref, state) => setScale(state.scale)}
-          >
-            {({ zoomIn, zoomOut, resetTransform }) => (
-              <div className="relative w-full h-full overflow-hidden">
-                <TransformComponent
-                  wrapperStyle={{ width: '100%', height: '100%' }}
-                  contentStyle={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                >
-                  {/*
-                   * ── Photo container ──
-                   * Sized to natural image pixels.
-                   * TransformWrapper scales this container as a unit,
-                   * so zoom is always proportional to real image pixels.
-                   */}
-                  <div
+          <>
+            {/*
+             * ── Content: transformed div ──
+             * transform-origin: 0 0  → all zoom math uses top-left anchor.
+             * kl-content class is read by SplitHandle to extract current scale.
+             */}
+            <div
+              ref={contentRef}
+              className="kl-content"
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                transformOrigin: '0 0',
+                willChange: 'transform',
+                width: `${photoW}px`,
+                height: `${photoH}px`,
+              }}
+            >
+              {/*
+               * ── Photo container ──
+               * Natural image dimensions in CSS pixels.
+               * Shadow and slight border to visually separate from bg.
+               */}
+              <div
+                style={{
+                  position: 'relative',
+                  width: `${photoW}px`,
+                  height: `${photoH}px`,
+                  boxShadow: '0 8px 48px rgba(0,0,0,0.65)',
+                  borderRadius: '2px',
+                  overflow: 'hidden',
+                  flexShrink: 0,
+                }}
+              >
+                {/* ── WebGL canvas: edited "After" ── */}
+                <canvas
+                  ref={canvasRef}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    width: '100%',
+                    height: '100%',
+                    display: 'block',
+                    imageRendering: 'auto',
+                    pointerEvents: 'none',
+                  }}
+                />
+
+                {/* ── "Before" image ──
+                  * Shown when:
+                  *   • showOriginal (Space held)   → full cover
+                  *   • isSplitView                 → left half via clipPath
+                  */}
+                {(showOriginal || isSplitView) && (
+                  <img
+                    src={beforeImageUrl || imageUrl}
+                    alt="Before"
+                    draggable={false}
                     style={{
-                      position: 'relative',
-                      width:  `${photoW}px`,
-                      height: `${photoH}px`,
-                      flexShrink: 0,
-                      overflow: 'hidden',
-                      boxShadow: '0 8px 48px rgba(0,0,0,0.6)',
-                      borderRadius: '2px',
+                      position: 'absolute',
+                      inset: 0,
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'fill',
+                      display: 'block',
+                      userSelect: 'none',
+                      pointerEvents: 'none',
+                      clipPath: isSplitView
+                        ? `inset(0 ${((1 - splitRatio) * 100).toFixed(3)}% 0 0)`
+                        : 'none',
+                      zIndex: 10,
                     }}
-                  >
-                    {/*
-                     * ── WebGL canvas: "After" (edited) ──
-                     * Always covers the full photo container.
-                     * useLiveFilterCanvas drives renders via requestAnimationFrame.
-                     */}
-                    <canvas
-                      ref={canvasRef}
+                  />
+                )}
+
+                {/* ── Before / After labels ── */}
+                {isSplitView && (
+                  <>
+                    <span
                       style={{
                         position: 'absolute',
-                        inset: 0,
-                        width: '100%',
-                        height: '100%',
-                        display: 'block',
-                        imageRendering: 'auto',
+                        top: 10,
+                        left: 10,
+                        maxWidth: `calc(${(splitRatio * 100).toFixed(0)}% - 20px)`,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        zIndex: 25,
+                        background: 'rgba(0,0,0,0.55)',
+                        color: 'white',
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        letterSpacing: '0.07em',
+                        textTransform: 'uppercase',
+                        pointerEvents: 'none',
+                        backdropFilter: 'blur(4px)',
+                        right: beforeBadgeRight,
                       }}
-                    />
+                    >
+                      Before
+                    </span>
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: 10,
+                        right: 10,
+                        left: afterBadgeLeft,
+                        maxWidth: `calc(${((1 - splitRatio) * 100).toFixed(0)}% - 20px)`,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        textAlign: 'right',
+                        zIndex: 25,
+                        background: 'rgba(0,0,0,0.55)',
+                        color: 'white',
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        letterSpacing: '0.07em',
+                        textTransform: 'uppercase',
+                        pointerEvents: 'none',
+                        backdropFilter: 'blur(4px)',
+                      }}
+                    >
+                      After
+                    </span>
+                  </>
+                )}
 
-                    {/*
-                     * ── "Before" image: shown full when showOriginal, or
-                     *    left-half when isSplitView ──
-                     */}
-                    {(showOriginal || isSplitView) && (
-                      <img
-                        src={beforeImageUrl || imageUrl}
-                        alt="Before"
-                        draggable={false}
-                        style={{
-                          position: 'absolute',
-                          inset: 0,
-                          width: '100%',
-                          height: '100%',
-                          objectFit: 'fill',
-                          display: 'block',
-                          userSelect: 'none',
-                          pointerEvents: 'none',
-                          // In split view: clip to left of the divider
-                          clipPath: isSplitView
-                            ? `inset(0 ${((1 - splitRatio) * 100).toFixed(2)}% 0 0)`
-                            : undefined,
-                          zIndex: 10,
-                        }}
-                      />
-                    )}
-
-                    {/*
-                     * ── Before/After label badges ──
-                     */}
-                    {isSplitView && (
-                      <>
-                        <span
-                          style={{
-                            position: 'absolute',
-                            top: 8,
-                            left: 8,
-                            zIndex: 25,
-                            background: 'rgba(0,0,0,0.55)',
-                            color: 'white',
-                            fontSize: '10px',
-                            fontWeight: 700,
-                            padding: '2px 8px',
-                            borderRadius: '4px',
-                            letterSpacing: '0.08em',
-                            textTransform: 'uppercase',
-                            pointerEvents: 'none',
-                          }}
-                        >
-                          Before
-                        </span>
-                        <span
-                          style={{
-                            position: 'absolute',
-                            top: 8,
-                            right: 8,
-                            zIndex: 25,
-                            background: 'rgba(0,0,0,0.55)',
-                            color: 'white',
-                            fontSize: '10px',
-                            fontWeight: 700,
-                            padding: '2px 8px',
-                            borderRadius: '4px',
-                            letterSpacing: '0.08em',
-                            textTransform: 'uppercase',
-                            pointerEvents: 'none',
-                          }}
-                        >
-                          After
-                        </span>
-                      </>
-                    )}
-
-                    {/*
-                     * ── Draggable split divider (inside TransformComponent) ──
-                     * Lives in photo-pixel space so it zooms and pans
-                     * in sync with the image — matching Lightroom's behaviour.
-                     */}
-                    {isSplitView && (
-                      <SplitHandle
-                        splitRatio={splitRatio}
-                        containerWidth={photoW}
-                        onDrag={setSplitRatio}
-                      />
-                    )}
-                  </div>
-                </TransformComponent>
-
-                {/* ── Zoom HUD (floats over stage, outside TransformComponent) ── */}
-                {!isCropActive && (
-                  <ZoomHUD
-                    scale={scale}
-                    onZoomIn={() => zoomIn(0.25)}
-                    onZoomOut={() => zoomOut(0.25)}
-                    onResetFit={() => resetTransform(220)}
-                    dimensions={imgDims}
+                {/* ── Draggable split handle ──
+                  * Lives in photo-pixel space → zooms and pans with the image.
+                  * Uses stopPropagation so stage never sees its pointer events.
+                  */}
+                {isSplitView && (
+                  <SplitHandle
+                    splitRatio={splitRatio}
+                    photoWidth={photoW}
+                    onDrag={setSplitRatio}
                   />
                 )}
               </div>
+            </div>
+
+            {/* ── Zoom HUD ── */}
+            {!isCropActive && (
+              <ZoomHUD
+                scale={zpState.scale}
+                onZoomIn={() => zoomIn()}
+                onZoomOut={() => zoomOut()}
+                onResetFit={() => fitToScreen()}
+                dimensions={imgDims}
+              />
             )}
-          </TransformWrapper>
+          </>
         )}
       </div>
 
