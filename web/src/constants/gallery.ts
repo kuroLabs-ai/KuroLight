@@ -1,0 +1,2 @@
+export const GALLERY_BATCH_SIZE = 200;
+export const SOURCE_FOLDER_BATCH_SIZE = 100;

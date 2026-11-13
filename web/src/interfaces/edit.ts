@@ -1,83 +1,5 @@
-export interface ImageMetadata {
-  width?: number;
-  height?: number;
-  camera_make?: string;
-  camera_model?: string;
-  lens_model?: string;
-  iso?: number;
-  shutter_speed?: string;
-  shutter_speed_str?: string;
-  aperture?: number;
-  aperture_f_number?: number;
-  focal_length?: number;
-  focal_length_mm?: number;
-  capture_date?: string;
-  format?: string;
-  exposure_compensation?: number;
-  [key: string]: unknown;
-}
-
-export interface AssetMetadataOverrides {
-  title: string;
-  description: string;
-  keywords: string[];
-  copyright: string;
-}
-
-export interface ImageAsset {
-  id: string;
-  file_name: string;
-  filename?: string;
-  source_path: string;
-  file_path?: string;
-  file_size?: number;
-  file_size_bytes?: number;
-  width?: number;
-  height?: number;
-  rating: number; // 0 to 5
-  flag: string; // 'flagged' (pick), 'unflagged', 'rejected'
-  deleted_at?: string | null;
-  thumbnail_url?: string;
-  camera_model?: string;
-  lens_model?: string;
-  iso?: number;
-  shutter_speed?: string;
-  f_number?: number;
-  focal_length?: number;
-  date_taken?: string;
-  format?: string;
-  metadata?: ImageMetadata;
-  metadata_overrides?: AssetMetadataOverrides;
-}
-
-export interface ColorScopeData {
-  width: number;
-  height: number;
-  data: number[];
-}
-
-export interface ColorScopes {
-  waveform: ColorScopeData;
-  vectorscope: ColorScopeData;
-}
-
-export interface Collection {
-  id: string;
-  name: string;
-  parent_id?: string | null;
-  collection_type?: 'manual' | 'smart';
-  rules?: SmartCollectionRules;
-  asset_ids?: string[];
-  asset_count?: number;
-  created_at?: string;
-}
-
-export interface SmartCollectionRules {
-  search: string;
-  minimum_rating: number;
-  flag: 'all' | 'flagged' | 'unflagged' | 'rejected';
-  source_folder: string | null;
-}
+import { AdjustmentMaskType, MaskCombineMode } from '../types/mask';
+import { RetouchMode } from '../types/retouch';
 
 export interface ExposureSettings {
   exposure: number;
@@ -167,9 +89,6 @@ export interface ToneCurvesSettings {
   blue_points: CurvePoint[];
 }
 
-export type AdjustmentMaskType = 'linear' | 'radial' | 'brush' | 'luminance_range' | 'color_range';
-export type MaskCombineMode = 'replace' | 'add' | 'subtract' | 'intersect';
-
 export interface MaskStroke {
   x: number;
   y: number;
@@ -194,8 +113,6 @@ export interface AdjustmentMask {
   geometry: Record<string, number | string | MaskStroke[]>;
 }
 
-export type RetouchMode = 'heal' | 'clone';
-
 export interface RetouchSpot {
   id: string;
   mode: RetouchMode;
@@ -207,13 +124,6 @@ export interface RetouchSpot {
   feather: number;
   opacity: number;
   enabled: boolean;
-}
-
-export interface Preset {
-  id: string;
-  name: string;
-  category: string;
-  parameters?: unknown;
 }
 
 export interface EditState {
@@ -230,17 +140,4 @@ export interface EditState {
   retouch_spots?: RetouchSpot[];
   snapshots?: Record<string, unknown>;
   custom_metadata?: Record<string, unknown>;
-}
-
-export type WorkspaceId = 'library' | 'develop' | 'color_studio' | 'visual_flow' | 'deliver';
-
-export interface ExportPreset {
-  id: string;
-  name: string;
-  format: 'JPEG' | 'PNG' | 'TIFF' | 'WEBP' | 'BMP' | 'GIF' | 'PPM';
-  quality: number;
-  color_space: string;
-  resize_mode: string;
-  resize_value: number;
-  resize_unit: 'px' | '%';
 }
