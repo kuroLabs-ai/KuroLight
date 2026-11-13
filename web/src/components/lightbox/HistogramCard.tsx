@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BarChart2, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
+import { BarChart2, ChevronDown, ChevronRight } from 'lucide-react';
 import { ImageAsset } from '../../types';
 
 interface HistogramCardProps {

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ImageAsset } from '../../types';
-import { Flag, Loader2, Star, X, CheckSquare, Square } from 'lucide-react';
+import { Flag, Star, X, CheckSquare, Square } from 'lucide-react';
 import { GalleryThumbnail } from './GalleryThumbnail';
 
 interface GalleryTableProps {
