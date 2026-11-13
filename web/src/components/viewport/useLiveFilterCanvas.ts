@@ -1,3 +1,11 @@
+/**
+ * useLiveFilterCanvas — connects WebGL LiveFilterRenderer to a canvas ref.
+ *
+ * Key fix: do NOT set crossOrigin = 'anonymous' on images loaded from Python's
+ * data: URLs or localhost. Edge WebView2 (pywebview) blocks cross-origin
+ * requests when no CORS headers are sent, which silently prevents the image
+ * from rendering into WebGL and causes an all-black canvas.
+ */
 import { useEffect, useRef } from 'react';
 import type { EditState } from '@/interfaces/edit';
 import { LiveFilterRenderer } from '@/utils/webgl/liveFilterRenderer';
@@ -15,11 +23,11 @@ export function useLiveFilterCanvas({
   canvasRef,
   onDimensionsLoaded,
 }: UseLiveFilterCanvasOptions): void {
-  const rendererRef = useRef<LiveFilterRenderer | null>(null);
-  const imageRef = useRef<HTMLImageElement | null>(null);
+  const rendererRef  = useRef<LiveFilterRenderer | null>(null);
+  const imageRef     = useRef<HTMLImageElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
-  // Initialize WebGL Renderer
+  // ── Boot WebGL renderer on canvas mount ──────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -33,7 +41,7 @@ export function useLiveFilterCanvas({
     };
   }, [canvasRef]);
 
-  // Load Image when source changes
+  // ── Load image whenever the src URL changes ──────────────────────────────
   useEffect(() => {
     if (!imageSrc) {
       imageRef.current = null;
@@ -41,35 +49,49 @@ export function useLiveFilterCanvas({
     }
 
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    // ⚠️  Do NOT set crossOrigin here.
+    // Python emits data: URLs which are same-origin by definition.
+    // Setting crossOrigin = 'anonymous' triggers a CORS preflight that
+    // Edge WebView2 fails because there are no Access-Control-Allow-Origin
+    // headers, causing texImage2D to silently produce a black texture.
+
     img.onload = () => {
       imageRef.current = img;
-      if (rendererRef.current) {
-        rendererRef.current.setImage(img);
-        rendererRef.current.render(editState);
+      const renderer = rendererRef.current;
+      if (renderer) {
+        renderer.setImage(img);
+        renderer.render(editState);
       }
       onDimensionsLoaded?.({
-        width: img.naturalWidth || img.width,
+        width:  img.naturalWidth  || img.width,
         height: img.naturalHeight || img.height,
       });
     };
+
+    img.onerror = (err) => {
+      console.error('[KuroLight] Failed to load preview image:', err);
+    };
+
     img.src = imageSrc;
 
     return () => {
-      img.onload = null;
+      img.onload  = null;
+      img.onerror = null;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageSrc]);
 
-  // Render on editState changes with requestAnimationFrame throttling
+  // ── Re-render on every editState change, throttled to one rAF ───────────
   useEffect(() => {
-    if (!rendererRef.current || !imageRef.current) return;
+    const renderer = rendererRef.current;
+    if (!renderer || !imageRef.current) return;
 
     if (animFrameRef.current !== null) {
       cancelAnimationFrame(animFrameRef.current);
     }
 
     animFrameRef.current = requestAnimationFrame(() => {
-      rendererRef.current?.render(editState);
+      renderer.render(editState);
       animFrameRef.current = null;
     });
 
