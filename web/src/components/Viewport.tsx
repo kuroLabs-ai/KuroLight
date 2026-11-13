@@ -80,110 +80,152 @@ export interface ViewportProps {
 
 // ─────────────────────────────────────────────
 // Before/After split handle
-// Lives in photo-pixel space (inside the photo container).
-// Dragging it adjusts splitRatio WITHOUT triggering stage pan.
+//
+// Key design: we use native addEventListener (not React synthetic events)
+// because useZoomPan also uses native addEventListener on the stage.
+// Native events fire in DOM order: child first → parent.
+// stopPropagation() on a native child event DOES prevent the parent's
+// native listener from firing — which is what we want.
+//
+// React synthetic events fire AFTER all native listeners (React 18 attaches
+// to the root), so React's stopPropagation() cannot stop native listeners.
 // ─────────────────────────────────────────────
 interface SplitHandleProps {
-  splitRatio: number;      // 0 … 1
-  photoWidth: number;      // natural photo width in px
+  splitRatio: number;   // 0 … 1
+  photoWidth: number;   // natural photo width in px
+  currentScale: number; // current viewport zoom scale (to convert screen→photo px)
   onDrag: (r: number) => void;
 }
 
-const SplitHandle: React.FC<SplitHandleProps> = ({ splitRatio, photoWidth, onDrag }) => {
-  const handleRef  = useRef<HTMLDivElement>(null);
-  const dragging   = useRef(false);
-  const startX     = useRef(0);
-  const startRatio = useRef(0);
+const SplitHandle: React.FC<SplitHandleProps> = ({
+  splitRatio,
+  photoWidth,
+  currentScale,
+  onDrag,
+}) => {
+  const divRef       = useRef<HTMLDivElement>(null);
+  const dragging     = useRef(false);
+  const lastClientX  = useRef(0);
+  const ratioRef     = useRef(splitRatio);
 
-  const onPointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      e.stopPropagation(); // stop stage from starting a pan
-      e.preventDefault();
-      dragging.current   = true;
-      startX.current     = e.clientX;
-      startRatio.current = splitRatio;
-      handleRef.current?.setPointerCapture(e.pointerId);
-    },
-    [splitRatio],
-  );
+  // Keep ratioRef in sync so the native handler always has the latest value
+  useEffect(() => { ratioRef.current = splitRatio; }, [splitRatio]);
+  const scaleRef = useRef(currentScale);
+  useEffect(() => { scaleRef.current = currentScale; }, [currentScale]);
+  const widthRef = useRef(photoWidth);
+  useEffect(() => { widthRef.current = photoWidth; }, [photoWidth]);
+  const onDragRef = useRef(onDrag);
+  useEffect(() => { onDragRef.current = onDrag; }, [onDrag]);
 
-  const onPointerMove = useCallback(
-    (e: React.PointerEvent) => {
-      if (!dragging.current || photoWidth <= 0) return;
+  useEffect(() => {
+    const el = divRef.current;
+    if (!el) return;
+
+    const onDown = (e: PointerEvent) => {
+      // Block the event from reaching the stage's pan listener
       e.stopPropagation();
-      // e.movementX doesn't work reliably on all browsers when captured,
-      // so we compute delta from the original down position.
-      const dx = e.clientX - startX.current;
-      // Convert screen-space dx → photo-space dx by dividing by current CSS scale.
-      // The handle is already in photo-pixel space, so delta in photo pixels =
-      // screen delta / scale.  We read scale from the content el's transform.
-      const content = handleRef.current?.closest<HTMLElement>('.kl-content');
-      let screenScale = 1;
-      if (content) {
-        const m = new DOMMatrixReadOnly(getComputedStyle(content).transform);
-        screenScale = m.a; // scaleX
-      }
-      const photoDelta = dx / screenScale;
-      const newRatio = Math.max(0.02, Math.min(0.98, startRatio.current + photoDelta / photoWidth));
-      onDrag(newRatio);
-    },
-    [photoWidth, onDrag],
-  );
+      e.preventDefault();
+      dragging.current  = true;
+      lastClientX.current = e.clientX;
+      el.setPointerCapture(e.pointerId);
+    };
 
-  const onPointerUp = useCallback((e: React.PointerEvent) => {
-    e.stopPropagation();
-    dragging.current = false;
-  }, []);
+    const onMove = (e: PointerEvent) => {
+      if (!dragging.current) return;
+      e.stopPropagation();
+
+      // delta in screen pixels → convert to photo pixels by dividing by zoom scale
+      const screenDx = e.clientX - lastClientX.current;
+      lastClientX.current = e.clientX;
+
+      const photoDx   = screenDx / scaleRef.current;
+      const newRatio  = Math.max(0.02, Math.min(0.98,
+        ratioRef.current + photoDx / widthRef.current,
+      ));
+      onDragRef.current(newRatio);
+    };
+
+    const onUp = (e: PointerEvent) => {
+      e.stopPropagation();
+      dragging.current = false;
+    };
+
+    el.addEventListener('pointerdown',   onDown);
+    el.addEventListener('pointermove',   onMove);
+    el.addEventListener('pointerup',     onUp);
+    el.addEventListener('pointercancel', onUp);
+
+    return () => {
+      el.removeEventListener('pointerdown',   onDown);
+      el.removeEventListener('pointermove',   onMove);
+      el.removeEventListener('pointerup',     onUp);
+      el.removeEventListener('pointercancel', onUp);
+    };
+  }, []); // runs once — all values accessed via refs
 
   const xPx = splitRatio * photoWidth;
 
   return (
     <div
-      ref={handleRef}
+      ref={divRef}
       data-split-handle="1"
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
       style={{
         position: 'absolute',
         top: 0,
         left: `${xPx}px`,
-        width: '2px',
+        // Expand hit area well beyond the 2px line so it's easy to grab
+        width: '44px',
         height: '100%',
-        background: 'rgba(255,255,255,0.90)',
-        boxShadow: '0 0 8px rgba(0,0,0,0.65)',
         cursor: 'ew-resize',
         zIndex: 20,
         touchAction: 'none',
-        willChange: 'left',
         transform: 'translateX(-50%)',
+        display: 'flex',
+        alignItems: 'stretch',
+        justifyContent: 'center',
       }}
     >
-      {/* Circular knob */}
+      {/* The visible 2 px line */}
       <div
         style={{
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: '34px',
-          height: '34px',
-          borderRadius: '50%',
-          background: 'white',
-          boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          width: '2px',
+          height: '100%',
+          background: 'rgba(255,255,255,0.92)',
+          boxShadow: '0 0 10px rgba(0,0,0,0.7)',
+          position: 'relative',
           pointerEvents: 'none',
-          userSelect: 'none',
         }}
       >
-        {/* ◄ ► arrows */}
-        <svg width="18" height="12" viewBox="0 0 18 12" fill="none">
-          <path d="M5 6H13M13 6L10 3M13 6L10 9M5 6L8 3M5 6L8 9"
-            stroke="#555" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
+        {/* Circular drag knob — centred on the line */}
+        <div
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            width: '36px',
+            height: '36px',
+            borderRadius: '50%',
+            background: 'white',
+            boxShadow: '0 2px 12px rgba(0,0,0,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            userSelect: 'none',
+          }}
+        >
+          {/* ◄│► icon */}
+          <svg width="20" height="12" viewBox="0 0 20 12" fill="none">
+            <path
+              d="M7 6H13M7 6L4 3M7 6L4 9M13 6L16 3M13 6L16 9"
+              stroke="#444"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <line x1="10" y1="1" x2="10" y2="11" stroke="#444" strokeWidth="1.4" strokeLinecap="round"/>
+          </svg>
+        </div>
       </div>
     </div>
   );
@@ -477,6 +519,7 @@ export const Viewport: React.FC<ViewportProps> = ({
                   <SplitHandle
                     splitRatio={splitRatio}
                     photoWidth={photoW}
+                    currentScale={zpState.scale}
                     onDrag={setSplitRatio}
                   />
                 )}

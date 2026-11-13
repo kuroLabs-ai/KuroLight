@@ -243,9 +243,9 @@ export function useZoomPan({
     if (!stage) return;
 
     const onPointerDown = (e: PointerEvent) => {
-      // Ignore right-click and events on handle elements
+      // Ignore right-click and any element inside the split handle
       if (e.button === 2) return;
-      if ((e.target as HTMLElement)?.dataset.splitHandle) return;
+      if ((e.target as HTMLElement)?.closest('[data-split-handle]')) return;
 
       dragging.current = true;
       lastPt.current = { x: e.clientX, y: e.clientY };
