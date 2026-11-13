@@ -2,6 +2,7 @@ import React from 'react';
 import { Viewport } from '../components/Viewport';
 import { RightPanel } from '../components/RightPanel';
 import { bridge } from '../bridge';
+import { DEFAULT_EDIT_STATE } from '@/constants/editState';
 import type { DevelopPageProps } from '../interfaces/pages';
 
 export type { DevelopPageProps };
@@ -10,7 +11,7 @@ export const DevelopPage: React.FC<DevelopPageProps> = ({
   imageUrl,
   beforeImageUrl,
   activeAsset,
-  editState,
+  editState: propEditState,
   selectedMaskId,
   onMaskSelect,
   selectedRetouchSpotId,
@@ -35,6 +36,12 @@ export const DevelopPage: React.FC<DevelopPageProps> = ({
   onRequestColorSample,
   onCancelColorSample,
 }) => {
+  const editState = propEditState || DEFAULT_EDIT_STATE;
+  const geometry = editState.geometry || DEFAULT_EDIT_STATE.geometry;
+  const masks = editState.masks ?? [];
+  const retouchSpots = editState.retouch_spots ?? [];
+  const lensCorrection = editState.lens_correction || DEFAULT_EDIT_STATE.lens_correction;
+
   return (
     <>
       <Viewport
@@ -46,33 +53,33 @@ export const DevelopPage: React.FC<DevelopPageProps> = ({
             ? { width: activeAsset.metadata.width || 0, height: activeAsset.metadata.height || 0 }
             : undefined
         }
-        masks={editState.masks}
+        masks={masks}
         selectedMaskId={selectedMaskId}
-        geometry={editState.geometry}
-        lensCorrection={editState.lens_correction}
-        retouchSpots={editState.retouch_spots}
+        geometry={geometry}
+        lensCorrection={lensCorrection}
+        retouchSpots={retouchSpots}
         selectedRetouchSpotId={selectedRetouchSpotId}
         onRetouchSpotSelect={onRetouchSpotSelect}
         onRetouchSpotChange={(spotId, updates) =>
           onChange({
             ...editState,
-            retouch_spots: (editState.retouch_spots ?? []).map((spot) =>
+            retouch_spots: retouchSpots.map((spot) =>
               spot.id === spotId ? { ...spot, ...updates } : spot
             ),
           })
         }
         onMaskSelect={onMaskSelect}
-        onMaskGeometryChange={(maskId, geometry) =>
+        onMaskGeometryChange={(maskId, geom) =>
           onChange({
             ...editState,
-            masks: (editState.masks ?? []).map((mask) =>
-              mask.id === maskId ? { ...mask, geometry } : mask
+            masks: masks.map((mask) =>
+              mask.id === maskId ? { ...mask, geometry: geom } : mask
             ),
           })
         }
         isCropActive={isCropActive}
         cropRect={cropRect}
-        aspectRatio={editState.geometry.aspect_ratio}
+        aspectRatio={geometry.aspect_ratio || 'Original'}
         onCropChange={onCropChange}
         onApplyCrop={(rect) => {
           onCropChange(rect);
@@ -95,7 +102,7 @@ export const DevelopPage: React.FC<DevelopPageProps> = ({
           });
         }}
         onSelectAspectRatio={(ratio) =>
-          onChange({ ...editState, geometry: { ...editState.geometry, aspect_ratio: ratio } })
+          onChange({ ...editState, geometry: { ...geometry, aspect_ratio: ratio } })
         }
         isFilmstripVisible={isFilmstripVisible}
         onToggleFilmstrip={onToggleFilmstrip}

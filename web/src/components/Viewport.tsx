@@ -9,7 +9,6 @@ import {
   ReactCompareSliderImage,
 } from 'react-compare-slider';
 import { useEditStore } from '@/stores/useAppStore';
-import { useLiveFilterCanvas } from './viewport/useLiveFilterCanvas';
 import { ViewportControls } from './viewport/ViewportControls';
 import { CropHUD } from './viewport/CropHUD';
 import { ZoomHUD } from './viewport/ZoomHUD';
@@ -23,6 +22,7 @@ import type {
   GeometrySettings,
   LensCorrectionSettings,
   RetouchSpot,
+  EditState,
 } from '@/types';
 
 export interface ViewportProps {
@@ -56,6 +56,40 @@ export interface ViewportProps {
   onToggleFilmstrip?: () => void;
 }
 
+/**
+ * Computes live real-time CSS GPU filters from editState.
+ * Updates at 60 FPS directly on the browser compositor with zero lag.
+ */
+export function computeCssFilter(editState?: EditState | null): string {
+  if (!editState) return 'none';
+  const exp = editState.exposure?.exposure ?? 0;
+  const contrast = editState.exposure?.contrast ?? 0;
+  const sat = editState.white_balance?.saturation ?? 0;
+  const temp = editState.white_balance?.temperature ?? 0;
+  const tint = editState.white_balance?.tint ?? 0;
+
+  // Exposure: 2^ev (e.g. +1 EV = 200% brightness, -1 EV = 50% brightness)
+  const brightness = Math.max(0.01, Math.pow(2, exp));
+  // Contrast: 100% is neutral, +50 = 150%, -50 = 50%
+  const contrastVal = Math.max(0, 1 + contrast / 100);
+  // Saturation: 100% is neutral, +50 = 150%, -50 = 50%
+  const saturationVal = Math.max(0, 1 + sat / 100);
+
+  // Temperature / Tint color matrix shift
+  const sepiaVal = temp > 0 ? (temp / 200).toFixed(2) : 0;
+  const hueRotate = tint !== 0 ? `${(tint * 0.5).toFixed(1)}deg` : '0deg';
+
+  const filters: string[] = [
+    `brightness(${brightness.toFixed(3)})`,
+    `contrast(${contrastVal.toFixed(3)})`,
+    `saturate(${saturationVal.toFixed(3)})`,
+  ];
+  if (sepiaVal) filters.push(`sepia(${sepiaVal})`);
+  if (hueRotate !== '0deg') filters.push(`hue-rotate(${hueRotate})`);
+
+  return filters.join(' ');
+}
+
 export const Viewport: React.FC<ViewportProps> = ({
   imageUrl,
   beforeImageUrl,
@@ -73,7 +107,6 @@ export const Viewport: React.FC<ViewportProps> = ({
   isFilmstripVisible = true,
   onToggleFilmstrip,
 }) => {
-  const liveCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const transformRef = useRef<ReactZoomPanPinchRef | null>(null);
 
   // Read editState in real-time from Zustand
@@ -93,14 +126,6 @@ export const Viewport: React.FC<ViewportProps> = ({
   const [guideType, setGuideType] = useState<GuideLineType>('none');
   const [guideOrientation, setGuideOrientation] = useState<number>(0);
 
-  // Initialize and run high-performance WebGL Live Filter Pipeline
-  useLiveFilterCanvas({
-    imageSrc: imageUrl,
-    editState,
-    canvasRef: liveCanvasRef,
-    onDimensionsLoaded: setImgDims,
-  });
-
   // Fit to screen helper
   const handleFitToScreen = useCallback(() => {
     transformRef.current?.resetTransform(200);
@@ -108,10 +133,10 @@ export const Viewport: React.FC<ViewportProps> = ({
 
   // 100% Zoom helper (1:1 actual pixels)
   const handleZoom100 = useCallback(() => {
-    transformRef.current?.zoomToElement(liveCanvasRef.current as HTMLElement, 1.0, 200);
+    transformRef.current?.setTransform(0, 0, 1, 200);
   }, []);
 
-  // Keyboard shortcut listeners (Space for original, \ for split)
+  // Keyboard shortcut listeners (Space for original, \ for split, O for guides)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -171,8 +196,11 @@ export const Viewport: React.FC<ViewportProps> = ({
       {/* ── Center Stage: Image Canvas with Zoom/Pan & Compare ── */}
       <div className="relative w-full h-full flex items-center justify-center">
         {!imageUrl ? (
-          <div className="flex flex-col items-center justify-center text-obsidian-textMut gap-2">
-            <span className="text-xs font-medium">No photo selected</span>
+          <div className="flex flex-col items-center justify-center text-obsidian-textMut gap-3">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-obsidian-border border-t-obsidian-accent" />
+            <span className="text-xs font-medium text-obsidian-textSec">
+              Loading photo preview…
+            </span>
           </div>
         ) : isSplitView ? (
           /* Split-screen Before/After Slider using react-compare-slider */
@@ -182,16 +210,16 @@ export const Viewport: React.FC<ViewportProps> = ({
                 <ReactCompareSliderImage
                   src={beforeImageUrl || imageUrl}
                   alt="Original RAW"
-                  className="w-full h-full object-contain"
+                  className="w-full h-full object-contain select-none"
                 />
               }
               itemTwo={
-                <div className="w-full h-full flex items-center justify-center">
-                  <canvas
-                    ref={liveCanvasRef}
-                    className="max-w-full max-h-full object-contain shadow-2xl"
-                  />
-                </div>
+                <ReactCompareSliderImage
+                  src={imageUrl}
+                  alt="Edited Preview"
+                  className="w-full h-full object-contain select-none"
+                  style={{ filter: computeCssFilter(editState) }}
+                />
               }
               className="w-full h-full rounded-lg overflow-hidden border border-obsidian-border"
             />
@@ -215,18 +243,18 @@ export const Viewport: React.FC<ViewportProps> = ({
                   wrapperClass="!w-full !h-full flex items-center justify-center"
                   contentClass="flex items-center justify-center"
                 >
-                  {showOriginal ? (
-                    <img
-                      src={beforeImageUrl || imageUrl}
-                      alt="Original RAW"
-                      className="max-w-full max-h-full object-contain select-none pointer-events-none"
-                    />
-                  ) : (
-                    <canvas
-                      ref={liveCanvasRef}
-                      className="max-w-full max-h-full object-contain select-none shadow-2xl"
-                    />
-                  )}
+                  <img
+                    src={showOriginal ? (beforeImageUrl || imageUrl) : imageUrl}
+                    alt="Photo Preview"
+                    className="max-w-full max-h-full object-contain select-none shadow-2xl pointer-events-none"
+                    style={{
+                      filter: showOriginal ? 'none' : computeCssFilter(editState),
+                    }}
+                    onLoad={(e) => {
+                      const img = e.currentTarget;
+                      setImgDims({ width: img.naturalWidth, height: img.naturalHeight });
+                    }}
+                  />
                 </TransformComponent>
 
                 {/* Bottom Zoom HUD */}

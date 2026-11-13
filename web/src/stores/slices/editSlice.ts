@@ -51,7 +51,25 @@ export const createEditSlice: StateCreator<AppState, [], [], EditSlice> = (set) 
   cropRect: { x: 0, y: 0, w: 1, h: 1 },
 
   setActiveAsset: (activeAsset) => set({ activeAsset }),
-  setEditState: (editState) => set({ editState }),
+  setEditState: (incomingState) =>
+    set(() => {
+      const state = incomingState || DEFAULT_EDIT_STATE;
+      return {
+        editState: {
+          ...DEFAULT_EDIT_STATE,
+          ...state,
+          exposure: { ...DEFAULT_EDIT_STATE.exposure, ...(state.exposure || {}) },
+          white_balance: { ...DEFAULT_EDIT_STATE.white_balance, ...(state.white_balance || {}) },
+          detail: { ...DEFAULT_EDIT_STATE.detail, ...(state.detail || {}) },
+          geometry: { ...DEFAULT_EDIT_STATE.geometry, ...(state.geometry || {}) },
+          lens_correction: { ...DEFAULT_EDIT_STATE.lens_correction, ...(state.lens_correction || {}) },
+          color_grading: { ...DEFAULT_EDIT_STATE.color_grading, ...(state.color_grading || {}) },
+          tone_curves: { ...DEFAULT_EDIT_STATE.tone_curves, ...(state.tone_curves || {}) },
+          masks: state.masks ?? [],
+          retouch_spots: state.retouch_spots ?? [],
+        },
+      };
+    }),
   updateEditState: (partial) =>
     set((state) => ({ editState: { ...state.editState, ...partial } })),
   setPresets: (presets) => set({ presets }),

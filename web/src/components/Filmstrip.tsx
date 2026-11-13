@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
 import { ImageAsset } from '../types';
 import { Star } from 'lucide-react';
 import { ResizeHandle } from './common/ResizeHandle';
@@ -136,15 +135,6 @@ export const Filmstrip: React.FC<FilmstripProps> = ({
   const cardWidth = Math.round(cardHeight * 1.08);
   const thumbHeight = Math.max(28, cardHeight - 34);
 
-  // Horizontal Virtualizer using @tanstack/react-virtual
-  const virtualizer = useVirtualizer({
-    horizontal: true,
-    count: visibleAssets.length,
-    getScrollElement: () => footerRef.current,
-    estimateSize: () => cardWidth + 12,
-    overscan: 4,
-  });
-
   return (
     <div className="relative flex flex-col z-20 flex-shrink-0">
       {/* ── Top Draggable Resize Handle ── */}
@@ -162,7 +152,7 @@ export const Filmstrip: React.FC<FilmstripProps> = ({
         ref={footerRef}
         onScroll={handleScroll}
         style={{ height: `${height}px` }}
-        className="app-surface flex items-center overflow-x-auto border-x-0 border-b-0 px-4 select-none transition-[height] duration-75 scrollbar-thin"
+        className="app-surface flex items-center space-x-3 overflow-x-auto border-x-0 border-b-0 px-4 select-none transition-[height] duration-75 scrollbar-thin"
       >
         {visibleAssets.length === 0 ? (
           <div className="flex-1 text-center text-xs text-obsidian-textMut italic">
@@ -180,75 +170,55 @@ export const Filmstrip: React.FC<FilmstripProps> = ({
             ) : 'No images in library. Click "Import" above to load photos.'}
           </div>
         ) : (
-          <div
-            style={{
-              width: `${virtualizer.getTotalSize()}px`,
-              height: '100%',
-              position: 'relative',
-            }}
-          >
-            {virtualizer.getVirtualItems().map((virtualItem) => {
-              const asset = visibleAssets[virtualItem.index];
-              if (!asset) return null;
-              const isSelected = asset.id === activeAssetId;
-              return (
-                <div
-                  key={virtualItem.key}
-                  style={{
-                    position: 'absolute',
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    left: `${virtualItem.start}px`,
-                    width: `${cardWidth}px`,
-                    height: `${cardHeight}px`,
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => onSelectAsset(asset.id)}
-                    aria-pressed={isSelected}
-                    aria-label={`Open ${asset.file_name || asset.filename}`}
-                    className={`flex h-full w-full cursor-pointer flex-col items-center justify-between rounded-xl border p-1.5 text-left transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-300 ${
-                      isSelected
-                        ? 'border-sky-300/60 bg-sky-400/[0.12] shadow-lg shadow-sky-950/20 ring-1 ring-sky-300/20'
-                        : 'border-white/[0.07] bg-white/[0.035] hover:border-white/20 hover:bg-white/[0.075]'
-                    }`}
-                  >
-                    {/* Thumbnail */}
-                    <GalleryThumbnail
-                      key={asset.id}
-                      assetId={asset.id}
-                      alt={asset.filename || asset.file_name}
-                      className="flex w-full flex-shrink-0 items-center justify-center overflow-hidden rounded-lg bg-black/30 ring-1 ring-white/[0.06]"
-                      fallback={<span className="text-[9px] text-obsidian-textMut font-mono">RAW</span>}
-                      style={{ height: `${thumbHeight}px` }}
-                    />
+          visibleAssets.map((asset) => {
+            const isSelected = asset.id === activeAssetId;
+            return (
+              <button
+                type="button"
+                key={asset.id}
+                onClick={() => onSelectAsset(asset.id)}
+                aria-pressed={isSelected}
+                aria-label={`Open ${asset.file_name || asset.filename}`}
+                style={{ height: `${cardHeight}px`, width: `${cardWidth}px` }}
+                className={`flex flex-shrink-0 cursor-pointer flex-col items-center justify-between rounded-xl border p-1.5 text-left transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-300 ${
+                  isSelected
+                    ? 'border-sky-300/60 bg-sky-400/[0.12] shadow-lg shadow-sky-950/20 ring-1 ring-sky-300/20'
+                    : 'border-white/[0.07] bg-white/[0.035] hover:border-white/20 hover:bg-white/[0.075]'
+                }`}
+              >
+                {/* Thumbnail */}
+                <GalleryThumbnail
+                  key={asset.id}
+                  assetId={asset.id}
+                  alt={asset.filename || asset.file_name}
+                  className="flex w-full flex-shrink-0 items-center justify-center overflow-hidden rounded-lg bg-black/30 ring-1 ring-white/[0.06]"
+                  fallback={<span className="text-[9px] text-obsidian-textMut font-mono">RAW</span>}
+                  style={{ height: `${thumbHeight}px` }}
+                />
 
-                    {/* Title & Metadata */}
-                    <div className="w-full text-center mt-1">
-                      <p className="text-[9.5px] font-medium text-obsidian-textPri truncate w-full leading-tight">
-                        {asset.file_name || asset.filename}
-                      </p>
-                      <div className="flex items-center justify-center space-x-1 text-[8px] text-obsidian-textMut mt-0.5">
-                        {asset.rating > 0 && (
-                          <span className="flex items-center text-yellow-400 font-bold">
-                            <Star className="w-2.5 h-2.5 fill-current mr-0.5" />
-                            {asset.rating}
-                          </span>
-                        )}
-                        {asset.flag === 'flagged' && (
-                          <span className="text-obsidian-accent font-bold">PICK</span>
-                        )}
-                        {asset.flag === 'rejected' && (
-                          <span className="text-red-400 font-bold">REJ</span>
-                        )}
-                      </div>
-                    </div>
-                  </button>
+                {/* Title & Metadata */}
+                <div className="w-full text-center mt-1">
+                  <p className="text-[9.5px] font-medium text-obsidian-textPri truncate w-full leading-tight">
+                    {asset.file_name || asset.filename}
+                  </p>
+                  <div className="flex items-center justify-center space-x-1 text-[8px] text-obsidian-textMut mt-0.5">
+                    {asset.rating > 0 && (
+                      <span className="flex items-center text-yellow-400 font-bold">
+                        <Star className="w-2.5 h-2.5 fill-current mr-0.5" />
+                        {asset.rating}
+                      </span>
+                    )}
+                    {asset.flag === 'flagged' && (
+                      <span className="text-obsidian-accent font-bold">PICK</span>
+                    )}
+                    {asset.flag === 'rejected' && (
+                      <span className="text-red-400 font-bold">REJ</span>
+                    )}
+                  </div>
                 </div>
-              );
-            })}
-          </div>
+              </button>
+            );
+          })
         )}
         {loadingMore && (
           <div className="flex-shrink-0 px-3 text-[10px] text-obsidian-textMut" role="status">

@@ -2,6 +2,7 @@ import React, { useCallback, Suspense, lazy } from 'react';
 import { Toaster } from 'sonner';
 import { TopBar, Filmstrip } from '@/components';
 import { GalleryPage, DevelopPage } from '@/pages';
+import { ErrorBoundary } from '@/components/common/ErrorBoundary';
 import {
   usePanelResize,
   usePreventZoom,
@@ -252,7 +253,8 @@ export const App: React.FC = () => {
           workspace === 'develop' ? 'lightbox-stage' : ''
         }`}
       >
-        {isAIPopupOpen && (
+        <ErrorBoundary>
+          {isAIPopupOpen && (
           <Suspense fallback={null}>
             <KuroAIPopup
               isOpen
@@ -375,6 +377,7 @@ export const App: React.FC = () => {
             />
           </Suspense>
         )}
+        </ErrorBoundary>
       </div>
 
       {/* Bottom Filmstrip */}
