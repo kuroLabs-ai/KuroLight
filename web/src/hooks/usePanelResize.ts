@@ -1,18 +1,14 @@
 import { useState, useCallback } from 'react';
+import type { UsePanelResizeOptions, UsePanelResizeResult } from '../interfaces/hooks';
 
-export interface UsePanelResizeOptions {
-  initialSize: number;
-  minSize?: number;
-  maxSize?: number;
-  storageKey?: string;
-}
+export type { UsePanelResizeOptions, UsePanelResizeResult };
 
 export function usePanelResize({
   initialSize,
   minSize = 120,
   maxSize = 800,
   storageKey,
-}: UsePanelResizeOptions) {
+}: UsePanelResizeOptions): UsePanelResizeResult {
   const [size, setSizeState] = useState<number>(() => {
     if (storageKey && typeof window !== 'undefined') {
       try {
