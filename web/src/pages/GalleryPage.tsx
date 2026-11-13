@@ -1,19 +1,24 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { ImageAsset, Collection } from '../../types';
-import { AssetPageFilters, SourceFolder, bridge } from '../../bridge';
-import { GallerySidebar } from './GallerySidebar';
-import { GalleryGrid } from './GalleryGrid';
-import { GalleryTable } from './GalleryTable';
-import { GalleryInspector } from './GalleryInspector';
-import { GalleryContextMenu } from './GalleryContextMenu';
-import { GalleryGridSkeleton, GalleryTableSkeleton } from './GallerySkeleton';
+import { ImageAsset } from '../types';
+import { AssetPageFilters, SourceFolder, bridge } from '../bridge';
+import { GallerySidebar } from '../components/gallery/GallerySidebar';
+import { GalleryGrid } from '../components/gallery/GalleryGrid';
+import { GalleryTable } from '../components/gallery/GalleryTable';
+import { GalleryInspector } from '../components/gallery/GalleryInspector';
+import { GalleryContextMenu } from '../components/gallery/GalleryContextMenu';
+import { GalleryGridSkeleton, GalleryTableSkeleton } from '../components/gallery/GallerySkeleton';
 import {
   matchesSmartCollectionRules,
   sourceFolderForPath,
-} from '../../utils/smartCollections';
-import { CompareWorkspace } from './CompareWorkspace';
-import { ResizeHandle } from '../common/ResizeHandle';
-import { usePanelResize } from '../../hooks/usePanelResize';
+} from '../utils/smartCollections';
+import { compareAsciiInsensitive } from '../utils/sort';
+import { CompareWorkspace } from '../components/gallery/CompareWorkspace';
+import { ResizeHandle } from '../components/common/ResizeHandle';
+import { usePanelResize } from '../hooks/usePanelResize';
+import type { GalleryPageProps } from '../interfaces/pages';
+import { GALLERY_BATCH_SIZE, SOURCE_FOLDER_BATCH_SIZE } from '../constants/gallery';
+
+export type { GalleryPageProps };
 import { 
   Search, 
   LayoutGrid, 
@@ -25,41 +30,12 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
-  Loader2,
   Columns,
   Eye,
   Trash2,
 } from 'lucide-react';
 
-const GALLERY_BATCH_SIZE = 200;
-const SOURCE_FOLDER_BATCH_SIZE = 100;
-
-function compareAsciiInsensitive(left: string, right: string): number {
-  const foldAscii = (value: string) => value.replace(/[A-Z]/g, (character) =>
-    character.toLowerCase()
-  );
-  const foldedLeft = foldAscii(left);
-  const foldedRight = foldAscii(right);
-  if (foldedLeft < foldedRight) return -1;
-  if (foldedLeft > foldedRight) return 1;
-  return 0;
-}
-
-interface GalleryWorkspaceProps {
-  assets: ImageAsset[];
-  totalAssetCount: number;
-  trashCount: number;
-  activeAsset?: ImageAsset | null;
-  libraryLoading: { loading: boolean; message: string; cancellable: boolean };
-  onCancelImport: () => void;
-  collections: Collection[];
-  activeCollectionId: string | null;
-  onActiveCollectionChange: (id: string | null) => void;
-  onOpenInLightbox: (id: string) => void;
-  onSelectedAssetChange?: (id: string | null) => void;
-}
-
-export const GalleryWorkspace: React.FC<GalleryWorkspaceProps> = ({
+export const GalleryPage: React.FC<GalleryPageProps> = ({
   assets,
   totalAssetCount,
   trashCount,
@@ -1001,3 +977,6 @@ export const GalleryWorkspace: React.FC<GalleryWorkspaceProps> = ({
     </div>
   );
 };
+
+
+

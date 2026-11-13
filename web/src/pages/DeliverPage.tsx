@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ImageAsset, ExportPreset, Collection } from '../../types';
+import { ImageAsset, ExportPreset } from '../types';
 import {
   Send,
   FolderOpen,
@@ -21,57 +21,28 @@ import {
   Play,
   X,
 } from 'lucide-react';
-import { bridge } from '../../bridge';
-import kuroAppIcon from '../../assets/logo-preview.png';
-import kuroWordmark from '../../assets/KuroLight-wordmark.svg';
-import { GalleryThumbnail } from '../gallery/GalleryThumbnail';
-import { matchesSmartCollectionRules } from '../../utils/smartCollections';
+import { bridge } from '../bridge';
+import kuroAppIcon from '../assets/logo-preview.png';
+import kuroWordmark from '../assets/KuroLight-wordmark.svg';
+import { GalleryThumbnail } from '../components/gallery/GalleryThumbnail';
+import { matchesSmartCollectionRules } from '../utils/smartCollections';
+import type { DeliverPageProps, ExportRecipe } from '../interfaces';
+import type { ExportFormat, ColorSpace, ResizeMode, WatermarkPosition, WatermarkType } from '../types';
+import { FORMAT_OPTIONS, RECIPES_KEY } from '../constants';
 
-interface DeliverWorkspaceProps {
-  assets: ImageAsset[];
-  activeAsset?: ImageAsset | null;
-  collections: Collection[];
-  activeCollectionId: string | null;
-}
-
-type ExportFormat = 'JPEG' | 'PNG' | 'TIFF' | 'WEBP' | 'BMP' | 'GIF' | 'PPM';
-type ColorSpace = 'sRGB';
-type ResizeMode = 'original' | 'fit_width' | 'fit_height' | 'fit_long' | 'fit_short' | 'custom';
-type WatermarkPosition = 'bottom_right' | 'bottom_left' | 'top_right' | 'center';
-type WatermarkType = 'app_icon' | 'wordmark' | 'text';
-
-const FORMAT_OPTIONS: { id: ExportFormat; label: string; lossy: boolean }[] = [
-  { id: 'JPEG', label: 'JPEG', lossy: true },
-  { id: 'PNG', label: 'PNG', lossy: false },
-  { id: 'TIFF', label: 'TIFF', lossy: false },
-  { id: 'WEBP', label: 'WebP', lossy: true },
-  { id: 'BMP', label: 'BMP', lossy: false },
-  { id: 'GIF', label: 'GIF', lossy: false },
-  { id: 'PPM', label: 'PPM', lossy: false },
-];
-
-interface ExportRecipe extends ExportPreset {
-  filename_pattern: string;
-  watermark_enabled: boolean;
-  watermark_type?: WatermarkType | 'logo';
-  watermark_text: string;
-  watermark_opacity: number;
-  watermark_position: WatermarkPosition;
-}
-
-const RECIPES_KEY = 'kurolight_export_recipes';
+export type { DeliverPageProps, ExportRecipe };
 
 function readRecipes(): ExportRecipe[] {
   try {
     const stored = localStorage.getItem(RECIPES_KEY);
-    return stored ? JSON.parse(stored) as ExportRecipe[] : [];
+    return stored ? (JSON.parse(stored) as ExportRecipe[]) : [];
   } catch (error) {
     console.error('Could not read saved export recipes', error);
     return [];
   }
 }
 
-export const DeliverWorkspace: React.FC<DeliverWorkspaceProps> = ({
+export const DeliverPage: React.FC<DeliverPageProps> = ({
   assets,
   activeAsset,
   collections,
@@ -1083,3 +1054,5 @@ export const DeliverWorkspace: React.FC<DeliverWorkspaceProps> = ({
     </div>
   );
 };
+
+

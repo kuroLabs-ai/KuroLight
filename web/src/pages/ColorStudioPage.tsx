@@ -1,27 +1,16 @@
 import React from 'react';
-import { ColorScopes, EditState, ImageAsset, RetouchSpot } from '../../types';
-import { Viewport } from '../Viewport';
-import { ColorScopesCard } from './ColorScopesCard';
-import { CurveEditorCard } from './CurveEditorCard';
-import { LUTCard } from './LUTCard';
-import { ColorWheelsPanel } from './ColorWheelsPanel';
-import { ResizeHandle } from '../common/ResizeHandle';
-import { usePanelResize } from '../../hooks/usePanelResize';
+import { Viewport } from '../components/Viewport';
+import { ColorScopesCard } from '../components/color_studio/ColorScopesCard';
+import { CurveEditorCard } from '../components/color_studio/CurveEditorCard';
+import { LUTCard } from '../components/color_studio/LUTCard';
+import { ColorWheelsPanel } from '../components/color_studio/ColorWheelsPanel';
+import { ResizeHandle } from '../components/common/ResizeHandle';
+import { useColorStudio } from './hooks/useColorStudio';
+import type { ColorStudioPageProps } from '../interfaces/pages';
 
-interface ColorStudioWorkspaceProps {
-  imageUrl?: string;
-  beforeImageUrl?: string;
-  activeAsset?: ImageAsset | null;
-  editState: EditState;
-  onChange: (newState: EditState) => void;
-  histogram?: { r: number[]; g: number[]; b: number[]; lum: number[] };
-  colorScopes?: ColorScopes | null;
-  selectedRetouchSpotId?: string | null;
-  onRetouchSpotSelect?: (spotId: string) => void;
-  onRetouchSpotChange?: (spotId: string, updates: Partial<RetouchSpot>) => void;
-}
+export type { ColorStudioPageProps };
 
-export const ColorStudioWorkspace: React.FC<ColorStudioWorkspaceProps> = ({
+export const ColorStudioPage: React.FC<ColorStudioPageProps> = ({
   imageUrl,
   beforeImageUrl,
   activeAsset,
@@ -33,42 +22,14 @@ export const ColorStudioWorkspace: React.FC<ColorStudioWorkspaceProps> = ({
   onRetouchSpotSelect,
   onRetouchSpotChange,
 }) => {
-  // Resizable Right Scopes/Curves Side Panel
   const {
-    size: sidePanelWidth,
-    handleResize: handleSidePanelResize,
-    resetSize: resetSidePanelWidth,
-  } = usePanelResize({
-    initialSize: 310,
-    minSize: 260,
-    maxSize: 520,
-    storageKey: 'kurolight_color_studio_sidebar_width',
-  });
-
-  const handleColorGradingChange = (newCg: typeof editState.color_grading) => {
-    onChange({
-      ...editState,
-      color_grading: newCg,
-    });
-  };
-
-  const handleCurvesChange = (newCurves: typeof editState.tone_curves) => {
-    onChange({
-      ...editState,
-      tone_curves: newCurves,
-    });
-  };
-
-  const handleLUTChange = (lutName: string | null, lutIntensity: number) => {
-    onChange({
-      ...editState,
-      color_grading: {
-        ...editState.color_grading,
-        lut_name: lutName,
-        lut_intensity: lutIntensity,
-      },
-    });
-  };
+    sidePanelWidth,
+    handleSidePanelResize,
+    resetSidePanelWidth,
+    handleColorGradingChange,
+    handleCurvesChange,
+    handleLUTChange,
+  } = useColorStudio({ editState, onChange });
 
   return (
     <div className="flex-1 flex flex-col h-full bg-obsidian-deep overflow-hidden select-none">
@@ -126,7 +87,7 @@ export const ColorStudioWorkspace: React.FC<ColorStudioWorkspaceProps> = ({
         </aside>
       </div>
 
-      {/* ── Bottom Section: 4-Way Color Wheels (Lift, Gamma, Gain, Offset) - Not resizable, full width ── */}
+      {/* ── Bottom Section: 4-Way Color Wheels (Lift, Gamma, Gain, Offset) ── */}
       <div className="h-[275px] w-full flex-shrink-0">
         <ColorWheelsPanel
           colorGrading={editState.color_grading}

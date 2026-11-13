@@ -1,5 +1,4 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { EditState, ImageAsset, Preset } from '../../types';
 import {
   Share2,
   Image as ImageIcon,
@@ -20,97 +19,34 @@ import {
   Circle,
   Search,
 } from 'lucide-react';
-import { bridge } from '../../bridge';
-import { ColorPickerInput } from '../common/ColorPickerInput';
-import { GalleryThumbnail } from '../gallery/GalleryThumbnail';
+import { bridge } from '../bridge';
+import { ColorPickerInput } from '../components/common/ColorPickerInput';
+import { GalleryThumbnail } from '../components/gallery/GalleryThumbnail';
+import type {
+  VisualFlowPageProps,
+  FlowNode,
+  FlowLayout,
+  VignetteSettings,
+  BackgroundRemovalSettings,
+} from '../interfaces';
+import type { FlowEffectCategory } from '../types';
+import { FLOW_NODE_OPTIONS, FLOW_PROCESS_ORDER } from '../constants';
 
-interface VisualFlowWorkspaceProps {
-  imageUrl?: string;
-  beforeImageUrl?: string;
-  activeAsset?: ImageAsset | null;
-  editState: EditState;
-  onChange: (newState: EditState) => void;
-  historyList: string[];
-  activeHistoryIndex: number;
-  presets: Preset[];
-  histogram?: { r: number[]; g: number[]; b: number[]; lum: number[] };
-}
+export type {
+  VisualFlowPageProps,
+  FlowNode,
+  FlowLayout,
+  VignetteSettings,
+  BackgroundRemovalSettings,
+} from '../interfaces';
 
-interface FlowNode {
-  id: string;
-  title: string;
-  category: 'input' | 'tone' | 'color' | 'detail' | 'grading' | 'curves' | 'hsl' | 'geometry' | 'dehaze' | 'vignette' | 'background_removal' | 'crop' | 'output';
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  enabled: boolean;
-  accent: string;
-}
-
-type FlowEffectCategory = Extract<
-  FlowNode['category'],
-  'tone' | 'color' | 'detail' | 'grading' | 'curves' | 'hsl' | 'geometry' | 'dehaze' | 'vignette' | 'background_removal'
->;
-
-const FLOW_NODE_OPTIONS: Array<{
-  category: FlowEffectCategory;
-  title: string;
-  accent: string;
-}> = [
-  { category: 'tone', title: 'Exposure & Tone', accent: '#F59E0B' },
-  { category: 'color', title: 'White Balance', accent: '#EC4899' },
-  { category: 'hsl', title: 'HSL Mixer', accent: '#F97316' },
-  { category: 'grading', title: 'Color Grading', accent: '#8B5CF6' },
-  { category: 'curves', title: 'Tone Curves', accent: '#06B6D4' },
-  { category: 'detail', title: 'Detail & Clarity', accent: '#10B981' },
-  { category: 'geometry', title: 'Geometry', accent: '#6366F1' },
-  { category: 'dehaze', title: 'Dehaze', accent: '#22C55E' },
-  { category: 'vignette', title: 'Vignette', accent: '#A855F7' },
-  { category: 'background_removal', title: 'Chroma Key', accent: '#F43F5E' },
-];
-
-const FLOW_PROCESS_ORDER: FlowNode['category'][] = [
-  'input',
-  'tone',
-  'color',
-  'hsl',
-  'curves',
-  'grading',
-  'detail',
-  'dehaze',
-  'vignette',
-  'geometry',
-  'background_removal',
-  'output',
-];
-
-interface FlowLayout {
-  id: string;
-  name: string;
-  nodes: Array<Pick<FlowNode, 'id' | 'x' | 'y'>>;
-}
-
-interface VignetteSettings {
-  enabled: boolean;
-  amount: number;
-  midpoint: number;
-  feather: number;
-}
-
-interface BackgroundRemovalSettings {
-  enabled: boolean;
-  color: string;
-  tolerance: number;
-  feather: number;
-}
 
 const readSettings = <T extends object>(value: unknown, defaults: T): T => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return defaults;
   return { ...defaults, ...(value as Partial<T>) };
 };
 
-export const VisualFlowWorkspace: React.FC<VisualFlowWorkspaceProps> = ({
+export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
   imageUrl,
   beforeImageUrl,
   activeAsset,
@@ -1913,3 +1849,7 @@ export const VisualFlowWorkspace: React.FC<VisualFlowWorkspaceProps> = ({
     </div>
   );
 };
+
+
+
+
