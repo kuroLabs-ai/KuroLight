@@ -4,3 +4,4 @@ export * from './theme';
 export * from './sort';
 export * from './format';
 export * from './cn';
+export * from './exif';

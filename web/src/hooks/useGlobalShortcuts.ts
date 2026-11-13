@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useHotkeys } from 'react-hotkeys-hook';
 import { useAppStore } from '../stores/useAppStore';
 import { bridge } from '../bridge';
 import { WorkspaceId } from '../types';
@@ -25,98 +25,84 @@ export function useGlobalShortcuts({
     setIsFilmstripVisible,
   } = useAppStore();
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
-      if (e.ctrlKey && ['=', '+', '-', '0'].includes(e.key)) {
-        e.preventDefault();
-        return;
-      }
+  // Declarative hotkeys using react-hotkeys-hook
+  // 1. Undo & Redo
+  useHotkeys('mod+z', (e) => {
+    e.preventDefault();
+    bridge.undo();
+  });
+  useHotkeys(['mod+shift+z', 'mod+y'], (e) => {
+    e.preventDefault();
+    bridge.redo();
+  });
 
-      const shortcut = getShortcutFromEvent(e);
-      if (!shortcut) return;
-      const action = Object.entries(loadShortcuts()).find(([, value]) => value === shortcut)?.[0];
-      if (!action) return;
+  // 2. Workspaces
+  useHotkeys('g', (e) => {
+    e.preventDefault();
+    onWorkspaceChange('library');
+  });
+  useHotkeys('d', (e) => {
+    e.preventDefault();
+    onWorkspaceChange('develop');
+  });
+  useHotkeys('c', (e) => {
+    e.preventDefault();
+    onWorkspaceChange('color_studio');
+  });
 
-      if (action.startsWith('workspace_')) {
-        const nextWorkspace = action.replace('workspace_', '') as WorkspaceId;
-        const workspaceIds: Record<string, WorkspaceId> = {
-          library: 'library',
-          develop: 'develop',
-          color_studio: 'color_studio',
-          visual_flow: 'visual_flow',
-          deliver: 'deliver',
-        };
-        const next = workspaceIds[nextWorkspace];
-        if (next) {
-          e.preventDefault();
-          onWorkspaceChange(next);
-        }
-      } else if (action.startsWith('gallery_')) {
-        e.preventDefault();
-        window.dispatchEvent(new CustomEvent('kurolight:shortcut', { detail: action }));
-      } else {
-        e.preventDefault();
-        switch (action) {
-          case 'import_images':
-            bridge.importFiles();
-            break;
-          case 'save_edits':
-            bridge.saveEditState(editState);
-            break;
-          case 'open_settings':
-            setIsSettingsOpen(true);
-            break;
-          case 'toggle_kuro_ai':
-            setIsAIPopupOpen(!isAIPopupOpen);
-            break;
-          case 'close_active_panel':
-            if (isSettingsOpen) setIsSettingsOpen(false);
-            else if (isAIPopupOpen) setIsAIPopupOpen(false);
-            else if (isCropActive) {
-              setIsCropActive(false);
-              bridge.cancelCrop();
-            }
-            break;
-          case 'undo':
-            bridge.undo();
-            break;
-          case 'redo':
-            bridge.redo();
-            break;
-          case 'toggle_filmstrip':
-            setIsFilmstripVisible((prev) => !prev);
-            bridge.toggleFilmstrip();
-            break;
-          case 'toggle_right_panel':
-            toggleRightPanelCollapse();
-            break;
-          case 'toggle_crop':
-            if (workspace === 'develop') {
-              setIsCropActive((previous) => {
-                const next = !previous;
-                bridge.setCropMode(next);
-                return next;
-              });
-            }
-            break;
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    workspace,
-    editState,
-    isSettingsOpen,
-    isAIPopupOpen,
-    isCropActive,
-    setIsSettingsOpen,
-    setIsAIPopupOpen,
-    setIsCropActive,
-    setIsFilmstripVisible,
-    toggleRightPanelCollapse,
-    onWorkspaceChange,
-  ]);
+  // 3. Panels & Tools
+  useHotkeys('tab', (e) => {
+    e.preventDefault();
+    toggleRightPanelCollapse();
+  });
+  useHotkeys('f', (e) => {
+    e.preventDefault();
+    setIsFilmstripVisible((prev) => !prev);
+    bridge.toggleFilmstrip();
+  });
+  useHotkeys('r', (e) => {
+    if (workspace === 'develop') {
+      e.preventDefault();
+      setIsCropActive(!isCropActive);
+      bridge.setCropMode(!isCropActive);
+    }
+  });
+
+  // 4. Modals & Settings
+  useHotkeys('mod+,', (e) => {
+    e.preventDefault();
+    setIsSettingsOpen(!isSettingsOpen);
+  });
+  useHotkeys('mod+s', (e) => {
+    e.preventDefault();
+    bridge.saveEditState(editState);
+  });
+  useHotkeys('mod+i', (e) => {
+    e.preventDefault();
+    bridge.importFiles();
+  });
+  useHotkeys('escape', () => {
+    if (isSettingsOpen) setIsSettingsOpen(false);
+    else if (isAIPopupOpen) setIsAIPopupOpen(false);
+    else if (isCropActive) {
+      setIsCropActive(false);
+      bridge.cancelCrop();
+    }
+  });
+
+  // 5. Catch-all custom user-mapped shortcuts
+  useHotkeys('*', (e) => {
+    const target = e.target as HTMLElement;
+    if (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+
+    const shortcut = getShortcutFromEvent(e);
+    if (!shortcut) return;
+    const action = Object.entries(loadShortcuts()).find(([, value]) => value === shortcut)?.[0];
+    if (!action) return;
+
+    if (action.startsWith('gallery_')) {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent('kurolight:shortcut', { detail: action }));
+    }
+  });
 }
