@@ -6,15 +6,17 @@
  * requests when no CORS headers are sent, which silently prevents the image
  * from rendering into WebGL and causes an all-black canvas.
  */
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { EditState } from '@/interfaces/edit';
 import { LiveFilterRenderer } from '@/utils/webgl/liveFilterRenderer';
+import { loadLUT } from '@/utils/webgl/lut';
 
 interface UseLiveFilterCanvasOptions {
   imageSrc?: string;
   editState: EditState | null;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
   onDimensionsLoaded?: (dims: { width: number; height: number }) => void;
+  onRendered?: (canvas: HTMLCanvasElement) => void;
 }
 
 export function useLiveFilterCanvas({
@@ -22,10 +24,26 @@ export function useLiveFilterCanvas({
   editState,
   canvasRef,
   onDimensionsLoaded,
-}: UseLiveFilterCanvasOptions): void {
+  onRendered,
+}: UseLiveFilterCanvasOptions): boolean {
+  const [isRendererReady, setIsRendererReady] = useState(false);
   const rendererRef  = useRef<LiveFilterRenderer | null>(null);
   const imageRef     = useRef<HTMLImageElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
+  const currentEditStateRef = useRef(editState);
+  const onRenderedRef = useRef(onRendered);
+
+  useLayoutEffect(() => {
+    currentEditStateRef.current = editState;
+  }, [editState]);
+  useLayoutEffect(() => {
+    onRenderedRef.current = onRendered;
+  }, [onRendered]);
+
+  const notifyRendered = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (canvas) onRenderedRef.current?.(canvas);
+  }, [canvasRef]);
 
   // ── Boot WebGL renderer on canvas mount ──────────────────────────────────
   useEffect(() => {
@@ -34,10 +52,12 @@ export function useLiveFilterCanvas({
 
     const renderer = new LiveFilterRenderer(canvas);
     rendererRef.current = renderer;
+    setIsRendererReady(renderer.isReady);
 
     return () => {
       renderer.destroy();
       rendererRef.current = null;
+      setIsRendererReady(false);
     };
   }, [canvasRef]);
 
@@ -60,7 +80,8 @@ export function useLiveFilterCanvas({
       const renderer = rendererRef.current;
       if (renderer) {
         renderer.setImage(img);
-        renderer.render(editState);
+        renderer.render(currentEditStateRef.current);
+        notifyRendered();
       }
       onDimensionsLoaded?.({
         width:  img.naturalWidth  || img.width,
@@ -92,6 +113,7 @@ export function useLiveFilterCanvas({
 
     animFrameRef.current = requestAnimationFrame(() => {
       renderer.render(editState);
+      notifyRendered();
       animFrameRef.current = null;
     });
 
@@ -101,5 +123,32 @@ export function useLiveFilterCanvas({
         animFrameRef.current = null;
       }
     };
-  }, [editState]);
+  }, [editState, notifyRendered]);
+
+  const lutName = editState?.color_grading?.lut_name ?? null;
+  useEffect(() => {
+    let cancelled = false;
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+
+    if (!lutName) {
+      renderer.setLUT(null);
+      renderer.render(currentEditStateRef.current);
+      notifyRendered();
+      return;
+    }
+
+    void loadLUT(lutName).then((cube) => {
+      if (cancelled) return;
+      renderer.setLUT(cube);
+      renderer.render(currentEditStateRef.current);
+      notifyRendered();
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [lutName, notifyRendered]);
+
+  return isRendererReady;
 }

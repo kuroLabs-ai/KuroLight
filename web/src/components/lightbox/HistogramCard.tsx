@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BarChart2, ChevronDown, ChevronRight } from 'lucide-react';
 import { ImageAsset } from '../../types';
+import type { HistogramData } from '../../interfaces/scopes';
 
 interface HistogramCardProps {
-  histogram?: { r: number[]; g: number[]; b: number[]; lum: number[] };
+  histogram?: HistogramData;
   asset?: ImageAsset | null;
 }
 
@@ -166,6 +167,11 @@ export const HistogramCard: React.FC<HistogramCardProps> = ({ histogram, asset }
           >
             <canvas ref={canvasRef} className="w-full h-full block" />
           </div>
+          {histogram?.sample_count ? (
+            <div className="text-center text-[9px] text-obsidian-textMut">
+              Rendered preview · {histogram.sample_count.toLocaleString()} analyzed pixels
+            </div>
+          ) : null}
 
           {/* Exposure Summary (ISO, Focal, Aperture, Shutter) */}
           {exposureSummary ? (

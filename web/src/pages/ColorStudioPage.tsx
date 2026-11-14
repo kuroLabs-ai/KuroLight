@@ -75,6 +75,7 @@ export const ColorStudioPage: React.FC<ColorStudioPageProps> = ({
           {/* Interactive Multi-channel Curve Editor */}
           <CurveEditorCard
             curves={editState.tone_curves}
+            histogram={histogram}
             onChange={handleCurvesChange}
           />
 

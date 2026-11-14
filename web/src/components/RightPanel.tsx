@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   SlidersHorizontal, 
   Palette, 
@@ -20,6 +20,7 @@ import {
   Eye,
   EyeOff,
   Eraser,
+  Pipette,
   PanelRightClose,
   PanelRightOpen
 } from 'lucide-react';
@@ -27,6 +28,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   AdjustmentMask,
   AdjustmentMaskType,
+  EditSnapshot,
   EditState,
   Preset,
   ImageAsset,
@@ -39,7 +41,9 @@ import { HistoryTab } from './lightbox/HistoryTab';
 import { HistogramCard } from './lightbox/HistogramCard';
 import { ResizeHandle } from './common/ResizeHandle';
 import { ColorPickerInput } from './common/ColorPickerInput';
+import { colorToHsv } from '@/utils/color';
 import { bridge } from '../bridge';
+import type { HistogramData } from '../interfaces/scopes';
 
 interface RightPanelProps {
   editState: EditState;
@@ -54,10 +58,16 @@ interface RightPanelProps {
   onToggleCrop?: () => void;
   onSelectAspectRatio?: (ratio: string) => void;
   presets?: Preset[];
-  historyList?: string[];
-  activeHistoryIndex?: number;
-  snapshots?: Record<string, unknown>;
-  histogram?: { r: number[]; g: number[]; b: number[]; lum: number[] };
+  onApplyPreset: (presetId: string) => void;
+  onSavePreset: (name: string, category: string) => void | Promise<void>;
+  onDeletePreset: (presetId: string) => void | Promise<void>;
+  editUndoStack?: EditState[];
+  editRedoStack?: EditState[];
+  currentEditState: EditState;
+  onJumpEditHistory?: (index: number) => void;
+  snapshots?: Record<string, EditSnapshot>;
+  onSnapshotChange?: (editState: EditState) => void;
+  histogram?: HistogramData;
   activeAsset?: ImageAsset | null;
   width?: number;
   onResize?: (delta: number) => void;
@@ -228,9 +238,15 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   onToggleCrop,
   onSelectAspectRatio,
   presets = [],
-  historyList = [],
-  activeHistoryIndex = -1,
+  onApplyPreset,
+  onSavePreset,
+  onDeletePreset,
+  editUndoStack = [],
+  editRedoStack = [],
+  currentEditState,
+  onJumpEditHistory,
   snapshots = {},
+  onSnapshotChange,
   histogram,
   activeAsset,
   width = 320,
@@ -242,9 +258,26 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   onCancelColorSample,
 }) => {
   const [activeTab, setActiveTab] = useState<'develop' | 'color' | 'presets' | 'history'>('develop');
+  const [pendingMaskSample, setPendingMaskSample] = useState<{
+    maskId: string;
+    kind: 'color' | 'luminance';
+  } | null>(null);
   const [enhancementModelReady, setEnhancementModelReady] = useState(false);
   const [downloadingEnhancementModel, setDownloadingEnhancementModel] = useState(false);
   const [enhancementModelError, setEnhancementModelError] = useState<string | null>(null);
+  const editStateRef = useRef(editState);
+  const onChangeRef = useRef(onChange);
+
+  useEffect(() => {
+    editStateRef.current = editState;
+    onChangeRef.current = onChange;
+  }, [editState, onChange]);
+
+  useEffect(() => {
+    const handleSampleCancelled = () => setPendingMaskSample(null);
+    window.addEventListener('kurolight:color-sample-cancelled', handleSampleCancelled);
+    return () => window.removeEventListener('kurolight:color-sample-cancelled', handleSampleCancelled);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -372,6 +405,62 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   const updateMasks = (nextMasks: AdjustmentMask[]) => onChange({ ...editState, masks: nextMasks });
   const updateMask = (id: string, updates: Partial<AdjustmentMask>) => {
     updateMasks(masks.map((mask) => mask.id === id ? { ...mask, ...updates } : mask));
+  };
+  const requestMaskSample = (
+    maskId: string,
+    kind: 'color' | 'luminance',
+  ) => {
+    if (!onRequestColorSample) return;
+    if (pendingMaskSample?.maskId === maskId && pendingMaskSample.kind === kind) {
+      onCancelColorSample?.();
+      setPendingMaskSample(null);
+      return;
+    }
+
+    setPendingMaskSample({ maskId, kind });
+    onRequestColorSample((color) => {
+      setPendingMaskSample(null);
+      if (!/^#[\da-f]{6}$/i.test(color)) {
+        console.error('[KuroLight] Image sampler returned an invalid color:', color);
+        return;
+      }
+
+      const currentState = editStateRef.current;
+      const targetMask = currentState.masks?.find((mask) => mask.id === maskId);
+      if (!targetMask) {
+        console.error(`[KuroLight] Could not update missing adjustment mask ${maskId}`);
+        return;
+      }
+
+      const geometry = { ...targetMask.geometry };
+      if (kind === 'color') {
+        const sampledColor = colorToHsv(color);
+        const saturationRadius = 0.15;
+        geometry.hue_center = sampledColor.hue;
+        geometry.saturation_min = Math.max(0, sampledColor.saturation - saturationRadius);
+        geometry.saturation_max = Math.min(1, sampledColor.saturation + saturationRadius);
+      } else {
+        const red = parseInt(color.slice(1, 3), 16) / 255;
+        const green = parseInt(color.slice(3, 5), 16) / 255;
+        const blue = parseInt(color.slice(5, 7), 16) / 255;
+        const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        const halfRange = Math.max(
+          0.05,
+          (typeof geometry.range_softness === 'number' ? geometry.range_softness : 0.05) * 2,
+        );
+        geometry.luminance_min = Math.max(0, luminance - halfRange);
+        geometry.luminance_max = Math.min(1, luminance + halfRange);
+      }
+
+      const nextState = {
+        ...currentState,
+        masks: currentState.masks?.map((mask) =>
+          mask.id === maskId ? { ...mask, geometry } : mask
+        ) ?? [],
+      };
+      editStateRef.current = nextState;
+      onChangeRef.current(nextState);
+    });
   };
   const createMask = (maskType: AdjustmentMaskType) => {
     const mask: AdjustmentMask = {
@@ -839,6 +928,23 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                     ))}
                     {selectedMask.mask_type === 'luminance_range' && (
                       <>
+                        {onRequestColorSample && (
+                          <button
+                            type="button"
+                            onClick={() => requestMaskSample(selectedMask.id, 'luminance')}
+                            aria-pressed={
+                              pendingMaskSample?.maskId === selectedMask.id &&
+                              pendingMaskSample.kind === 'luminance'
+                            }
+                            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-obsidian-border bg-obsidian-card py-1.5 text-[10px] font-semibold text-obsidian-textSec transition-colors hover:border-obsidian-accent/50 hover:text-white aria-pressed:border-obsidian-accent aria-pressed:bg-obsidian-accent/15 aria-pressed:text-obsidian-accent"
+                          >
+                            <Pipette size={12} />
+                            {pendingMaskSample?.maskId === selectedMask.id &&
+                            pendingMaskSample.kind === 'luminance'
+                              ? 'Click image to sample luminance'
+                              : 'Sample luminance from image'}
+                          </button>
+                        )}
                         <PrecisionSlider
                           label="Darkest"
                           value={typeof selectedMask.geometry.luminance_min === 'number' ? selectedMask.geometry.luminance_min : 0.25}
@@ -863,6 +969,23 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                     )}
                     {selectedMask.mask_type === 'color_range' && (
                       <>
+                        {onRequestColorSample && (
+                          <button
+                            type="button"
+                            onClick={() => requestMaskSample(selectedMask.id, 'color')}
+                            aria-pressed={
+                              pendingMaskSample?.maskId === selectedMask.id &&
+                              pendingMaskSample.kind === 'color'
+                            }
+                            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-obsidian-border bg-obsidian-card py-1.5 text-[10px] font-semibold text-obsidian-textSec transition-colors hover:border-obsidian-accent/50 hover:text-white aria-pressed:border-obsidian-accent aria-pressed:bg-obsidian-accent/15 aria-pressed:text-obsidian-accent"
+                          >
+                            <Pipette size={12} />
+                            {pendingMaskSample?.maskId === selectedMask.id &&
+                            pendingMaskSample.kind === 'color'
+                              ? 'Click image to sample color'
+                              : 'Sample color from image'}
+                          </button>
+                        )}
                         <PrecisionSlider
                           label="Hue"
                           value={typeof selectedMask.geometry.hue_center === 'number' ? selectedMask.geometry.hue_center : 210}
@@ -924,6 +1047,19 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                         <p className="text-[9px] text-obsidian-textSec">
                           Paint directly on the image to add to this mask.
                         </p>
+                        <button
+                          type="button"
+                          disabled={
+                            !Array.isArray(selectedMask.geometry.strokes) ||
+                            selectedMask.geometry.strokes.length === 0
+                          }
+                          onClick={() => updateMask(selectedMask.id, {
+                            geometry: { ...selectedMask.geometry, strokes: [] },
+                          })}
+                          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-obsidian-border bg-obsidian-card py-1.5 text-[10px] font-semibold text-obsidian-textSec transition-colors hover:border-red-400/50 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <Eraser size={12} /> Clear brush strokes
+                        </button>
                         <PrecisionSlider
                           label="Brush Size"
                           value={typeof selectedMask.geometry.brush_size === 'number' ? selectedMask.geometry.brush_size : 0.04}
@@ -1003,7 +1139,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                       />
                     </div>
                     <p className="text-[9px] leading-relaxed text-obsidian-textMut">
-                      Gradient placement is in normalized image coordinates. Brush painting and color/luminance ranges are not available yet.
+                      Masks update the live preview and are saved with this photo.
                     </p>
                   </div>
                 )}
@@ -1294,14 +1430,24 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                 <div className="grid grid-cols-3 gap-1.5 pt-1">
                   <button
                     onClick={() => updateGeometry('horizontal_flip', !editState.geometry.horizontal_flip)}
-                    className="flex items-center justify-center space-x-1 py-1 px-2 rounded bg-obsidian-card hover:bg-obsidian-hover border border-obsidian-border text-[10px] font-semibold text-obsidian-textPri"
+                    aria-pressed={editState.geometry.horizontal_flip}
+                    className={`flex items-center justify-center space-x-1 py-1 px-2 rounded border text-[10px] font-semibold ${
+                      editState.geometry.horizontal_flip
+                        ? 'bg-obsidian-accent border-obsidian-accent text-white'
+                        : 'bg-obsidian-card hover:bg-obsidian-hover border-obsidian-border text-obsidian-textPri'
+                    }`}
                   >
                     <FlipHorizontal className="w-3 h-3" />
                     <span>Flip H</span>
                   </button>
                   <button
                     onClick={() => updateGeometry('vertical_flip', !editState.geometry.vertical_flip)}
-                    className="flex items-center justify-center space-x-1 py-1 px-2 rounded bg-obsidian-card hover:bg-obsidian-hover border border-obsidian-border text-[10px] font-semibold text-obsidian-textPri"
+                    aria-pressed={editState.geometry.vertical_flip}
+                    className={`flex items-center justify-center space-x-1 py-1 px-2 rounded border text-[10px] font-semibold ${
+                      editState.geometry.vertical_flip
+                        ? 'bg-obsidian-accent border-obsidian-accent text-white'
+                        : 'bg-obsidian-card hover:bg-obsidian-hover border-obsidian-border text-obsidian-textPri'
+                    }`}
                   >
                     <FlipVertical className="w-3 h-3" />
                     <span>Flip V</span>
@@ -1362,18 +1508,27 @@ export const RightPanel: React.FC<RightPanelProps> = ({
           )}
 
           {activeTab === 'color' && (
-            <ColorTab editState={editState} onChange={onChange} />
+            <ColorTab editState={editState} histogram={histogram} onChange={onChange} />
           )}
 
           {activeTab === 'presets' && (
-            <PresetsTab presets={presets} />
+            <PresetsTab
+              presets={presets}
+              onApplyPreset={onApplyPreset}
+              onSavePreset={onSavePreset}
+              onDeletePreset={onDeletePreset}
+            />
           )}
 
           {activeTab === 'history' && (
             <HistoryTab
-              historyList={historyList}
-              activeHistoryIndex={activeHistoryIndex}
+              editUndoStack={editUndoStack}
+              editRedoStack={editRedoStack}
+              currentEditState={currentEditState}
+              onJumpEditHistory={onJumpEditHistory ?? (() => undefined)}
               snapshots={snapshots}
+              onChange={onChange}
+              onSnapshotChange={onSnapshotChange ?? onChange}
             />
           )}
         </div>

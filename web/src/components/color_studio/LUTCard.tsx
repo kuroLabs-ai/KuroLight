@@ -1,5 +1,6 @@
 import React, { useRef } from 'react';
 import { Layers, Upload } from 'lucide-react';
+import { parseCubeText, registerCustomLUT } from '@/utils/webgl/lut';
 
 interface LUTCardProps {
   lutName?: string | null;
@@ -30,11 +31,19 @@ export const LUTCard: React.FC<LUTCardProps> = ({
     onChange(lutName ?? null, val);
   };
 
-  const handleCustomCubeFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCustomCubeFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
+    if (!file) return;
+
+    try {
       const stem = file.name.replace(/\.[^/.]+$/, '');
+      const cube = parseCubeText(await file.text());
+      registerCustomLUT(stem, cube);
       onChange(stem, lutIntensity);
+    } catch (error) {
+      console.error('[KuroLight] Failed to load .cube LUT:', error);
+    } finally {
+      e.target.value = '';
     }
   };
 

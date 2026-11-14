@@ -32,10 +32,6 @@ export const ColorWheelsPanel: React.FC<ColorWheelsPanelProps> = ({ colorGrading
     onChange({ ...currentCg, [key]: val });
   };
 
-  const handleResetAll = () => {
-    onChange(DEFAULT_CG);
-  };
-
   return (
     <div className="w-full h-full bg-obsidian-panel border-t border-obsidian-border flex flex-row select-none overflow-hidden relative">
       {WHEEL_CONFIG.map(({ key, title, subtitle, accent }, idx) => (

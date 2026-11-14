@@ -1,7 +1,6 @@
 import React from 'react';
 import { Viewport } from '../components/Viewport';
 import { RightPanel } from '../components/RightPanel';
-import { bridge } from '../bridge';
 import { DEFAULT_EDIT_STATE } from '@/constants/editState';
 import type { DevelopPageProps } from '../interfaces/pages';
 
@@ -25,8 +24,13 @@ export const DevelopPage: React.FC<DevelopPageProps> = ({
   isFilmstripVisible,
   onToggleFilmstrip,
   presets,
-  historyList,
-  activeHistoryIndex,
+  onApplyPreset,
+  onSavePreset,
+  onDeletePreset,
+  onSnapshotChange,
+  editUndoStack,
+  editRedoStack,
+  onJumpEditHistory,
   histogram,
   rightPanelWidth,
   isRightPanelCollapsed,
@@ -41,12 +45,24 @@ export const DevelopPage: React.FC<DevelopPageProps> = ({
   const masks = editState.masks ?? [];
   const retouchSpots = editState.retouch_spots ?? [];
   const lensCorrection = editState.lens_correction || DEFAULT_EDIT_STATE.lens_correction;
+  const toggleCrop = () => {
+    if (!isCropActive) {
+      onCropChange({
+        x: geometry.crop_x,
+        y: geometry.crop_y,
+        w: geometry.crop_width,
+        h: geometry.crop_height,
+      });
+    }
+    setIsCropActive((previous) => !previous);
+  };
 
   return (
     <>
       <Viewport
         imageUrl={imageUrl}
         beforeImageUrl={beforeImageUrl}
+        thumbnailPreviewUrl={activeAsset?.thumbnail_url}
         activeAssetId={activeAsset?.id}
         dimensions={
           activeAsset?.metadata
@@ -83,23 +99,36 @@ export const DevelopPage: React.FC<DevelopPageProps> = ({
         onCropChange={onCropChange}
         onApplyCrop={(rect) => {
           onCropChange(rect);
+          onChange({
+            ...editState,
+            geometry: {
+              ...geometry,
+              crop_x: rect.x,
+              crop_y: rect.y,
+              crop_width: rect.w,
+              crop_height: rect.h,
+            },
+          });
           setIsCropActive(false);
-          bridge.applyCrop(rect.x, rect.y, rect.w, rect.h);
         }}
         onCancelCrop={() => {
           setIsCropActive(false);
-          bridge.cancelCrop();
         }}
         onResetCrop={() => {
           onCropChange({ x: 0, y: 0, w: 1, h: 1 });
-          bridge.resetCrop();
+          onChange({
+            ...editState,
+            geometry: {
+              ...geometry,
+              crop_x: 0,
+              crop_y: 0,
+              crop_width: 1,
+              crop_height: 1,
+            },
+          });
         }}
         onToggleCrop={() => {
-          setIsCropActive((prev) => {
-            const next = !prev;
-            bridge.setCropMode(next);
-            return next;
-          });
+          toggleCrop();
         }}
         onSelectAspectRatio={(ratio) =>
           onChange({ ...editState, geometry: { ...geometry, aspect_ratio: ratio } })
@@ -115,24 +144,23 @@ export const DevelopPage: React.FC<DevelopPageProps> = ({
         selectedRetouchSpotId={selectedRetouchSpotId}
         onRetouchSpotSelect={onRetouchSpotSelect}
         onChange={onChange}
-        onAutoTone={() => bridge.autoTone()}
+        onAutoTone={() => undefined}
         onResetAll={onResetAll}
         isCropActive={isCropActive}
-        onToggleCrop={() => {
-          setIsCropActive((prev) => {
-            const next = !prev;
-            bridge.setCropMode(next);
-            return next;
-          });
-        }}
+        onToggleCrop={toggleCrop}
+        onApplyPreset={onApplyPreset}
+        onSavePreset={onSavePreset}
+        onDeletePreset={onDeletePreset}
         onSelectAspectRatio={(ratio) => {
           setIsCropActive(true);
-          bridge.setCropMode(true);
           onChange({ ...editState, geometry: { ...editState.geometry, aspect_ratio: ratio } });
         }}
         presets={presets}
-        historyList={historyList}
-        activeHistoryIndex={activeHistoryIndex}
+        editUndoStack={editUndoStack}
+        editRedoStack={editRedoStack}
+        onJumpEditHistory={onJumpEditHistory}
+        onSnapshotChange={onSnapshotChange}
+        currentEditState={editState}
         snapshots={editState.snapshots ?? {}}
         histogram={histogram}
         activeAsset={activeAsset}

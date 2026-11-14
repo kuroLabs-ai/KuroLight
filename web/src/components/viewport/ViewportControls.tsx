@@ -11,7 +11,6 @@ import {
 import {
   GUIDE_OPTIONS,
   type GuideLineType,
-  getNextOrientation,
 } from '@/utils/compositionGuides';
 
 export interface ViewportControlsProps {

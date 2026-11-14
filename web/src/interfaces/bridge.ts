@@ -1,8 +1,7 @@
 import { ImageAsset } from './asset';
 import { Collection } from './collection';
 import { EditState } from './edit';
-import { Preset } from './preset';
-import { ColorScopes } from './scopes';
+import { ColorScopes, HistogramData } from './scopes';
 import { WorkspaceId } from '../types/workspace';
 
 export type PythonApi = Record<string, (...args: unknown[]) => Promise<unknown>>;
@@ -16,13 +15,12 @@ declare global {
 export interface BridgeEvents {
   image_updated: [string];
   before_image_updated: [string];
-  histogram_updated: [{ r: number[]; g: number[]; b: number[]; lum: number[] }];
+  histogram_updated: [HistogramData];
   assets_updated: [ImageAsset[]];
   asset_count_updated: [number];
   trash_count_updated: [number];
   library_loading: [{ loading: boolean; message: string; cancellable: boolean }];
   collections_updated: [Collection[]];
-  presets_updated: [Preset[]];
   history_updated: [string[], number];
   asset_selected: [ImageAsset | null, EditState | null];
   filmstrip_toggled: [boolean];

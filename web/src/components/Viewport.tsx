@@ -24,18 +24,23 @@
 import React, {
   useRef,
   useState,
-  useCallback,
   useEffect,
   useMemo,
+  useCallback,
 } from 'react';
 import { useEditStore } from '@/stores/useAppStore';
+import { bridge } from '@/bridge';
 import { ViewportControls } from './viewport/ViewportControls';
 import { CropHUD } from './viewport/CropHUD';
 import { ZoomHUD } from './viewport/ZoomHUD';
+import { CropOverlay, MaskRetouchOverlay, type CropRect } from './viewport/ImageEditOverlay';
 import { useLiveFilterCanvas } from './viewport/useLiveFilterCanvas';
 import { useZoomPan } from './viewport/useZoomPan';
+import { getRotatedImageDimensions } from '@/utils/imageGeometry';
+import { calculateRenderedScopes } from '@/utils/renderedScopes';
 import {
   type GuideLineType,
+  drawCompositionGuide,
   getNextOrientation,
   getNextGuideType,
 } from '@/utils/compositionGuides';
@@ -52,6 +57,7 @@ import type {
 export interface ViewportProps {
   imageUrl?: string;
   beforeImageUrl?: string;
+  thumbnailPreviewUrl?: string;
   activeAssetId?: string;
   dimensions?: { width: number; height: number };
   masks?: AdjustmentMask[];
@@ -237,10 +243,22 @@ const SplitHandle: React.FC<SplitHandleProps> = ({
 export const Viewport: React.FC<ViewportProps> = ({
   imageUrl,
   beforeImageUrl,
-  activeAssetId: _activeAssetId,
+  thumbnailPreviewUrl,
+  activeAssetId,
   dimensions,
+  masks = [],
+  selectedMaskId = null,
+  geometry,
+  onMaskSelect,
+  onMaskGeometryChange,
+  retouchSpots = [],
+  selectedRetouchSpotId = null,
+  onRetouchSpotSelect,
+  onRetouchSpotChange,
   isCropActive = false,
+  cropRect,
   aspectRatio = 'Original',
+  onCropChange,
   onApplyCrop,
   onCancelCrop,
   onResetCrop,
@@ -250,33 +268,280 @@ export const Viewport: React.FC<ViewportProps> = ({
   onToggleFilmstrip,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const guideCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const colorSampleCallbackRef = useRef<((color: string) => void) | null>(null);
+  const [isSamplingColor, setIsSamplingColor] = useState(false);
+  const scopesUpdateTimerRef = useRef<number | null>(null);
+  const latestRenderedCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const lastScopesUpdateRef = useRef(0);
+  const [loadedImageDims, setLoadedImageDims] = useState<
+    { assetId: string | undefined; width: number; height: number } | null
+  >(null);
+  const [thumbnail, setThumbnail] = useState<{ assetId: string; url: string } | null>(null);
+  const [guideType, setGuideType] = useState<GuideLineType>('none');
+  const [guideOrientation, setGuideOrientation] = useState<number>(0);
+  const imgDims =
+    loadedImageDims !== null && loadedImageDims.assetId === activeAssetId
+      ? { width: loadedImageDims.width, height: loadedImageDims.height }
+      : dimensions;
+  const rotation = (geometry?.rotation ?? 0) + (geometry?.straighten ?? 0);
+  const rotatedDims = imgDims
+    ? getRotatedImageDimensions(imgDims.width, imgDims.height, rotation)
+    : undefined;
+  const appliedCropRect: CropRect = useMemo(() => ({
+    x: clampCrop(geometry?.crop_x ?? 0),
+    y: clampCrop(geometry?.crop_y ?? 0),
+    w: clampCropSize(geometry?.crop_width ?? 1, geometry?.crop_x ?? 0),
+    h: clampCropSize(geometry?.crop_height ?? 1, geometry?.crop_y ?? 0),
+  }), [
+    geometry?.crop_x,
+    geometry?.crop_y,
+    geometry?.crop_width,
+    geometry?.crop_height,
+  ]);
+  const activeCropRect = cropRect ?? appliedCropRect;
+
+  useEffect(() => {
+    const canvas = guideCanvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (!canvas || !context) return;
+
+    const draw = () => {
+      const bounds = canvas.getBoundingClientRect();
+      const pixelRatio = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.round(bounds.width * pixelRatio));
+      const height = Math.max(1, Math.round(bounds.height * pixelRatio));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      context.clearRect(0, 0, bounds.width, bounds.height);
+      const guideRect = isCropActive ? activeCropRect : { x: 0, y: 0, w: 1, h: 1 };
+      drawCompositionGuide(
+        context,
+        {
+          x: guideRect.x * bounds.width,
+          y: guideRect.y * bounds.height,
+          w: guideRect.w * bounds.width,
+          h: guideRect.h * bounds.height,
+        },
+        guideType,
+        guideOrientation,
+        { lineWidth: 1 }
+      );
+    };
+
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [activeCropRect, guideOrientation, guideType, isCropActive]);
+
+  useEffect(() => {
+    if (!activeAssetId || thumbnailPreviewUrl) return;
+
+    let cancelled = false;
+    void bridge
+      .getThumbnail(activeAssetId)
+      .then((url) => {
+        if (!cancelled) setThumbnail({ assetId: activeAssetId, url });
+      })
+      .catch((error: unknown) => {
+        console.error(`[KuroLight] Failed to load preview thumbnail for ${activeAssetId}:`, error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAssetId, thumbnailPreviewUrl]);
+
+  const cachedThumbnailUrl =
+    thumbnail !== null && thumbnail.assetId === activeAssetId ? thumbnail.url : '';
+  const thumbnailUrl = thumbnailPreviewUrl || cachedThumbnailUrl;
+
+  const handleDimensionsLoaded = useCallback(
+    (loaded: { width: number; height: number }) =>
+      setLoadedImageDims({ assetId: activeAssetId, ...loaded }),
+    [activeAssetId]
+  );
 
   // Live edit state from Zustand
   const editState = useEditStore((state) => state.editState);
-
-  // Natural image dimensions (resolved by WebGL after image loads)
-  const [imgDims, setImgDims] = useState<{ width: number; height: number } | undefined>(dimensions);
+  const setHistogram = useEditStore((state) => state.setHistogram);
+  const setColorScopes = useEditStore((state) => state.setColorScopes);
 
   // Before/After compare
   const [isSplitView,  setIsSplitView]  = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
   const [splitRatio,   setSplitRatio]   = useState(0.5);
 
-  // Composition guides
-  const [guideType,        setGuideType]        = useState<GuideLineType>('none');
-  const [guideOrientation, setGuideOrientation] = useState<number>(0);
-
   // ── WebGL live filter ──────────────────────────────────────────────────
-  useLiveFilterCanvas({
-    imageSrc:  imageUrl,
-    editState: showOriginal ? null : editState,
+  const previewSource = beforeImageUrl || thumbnailUrl || imageUrl;
+  const handleRendered = useCallback((canvas: HTMLCanvasElement) => {
+    latestRenderedCanvasRef.current = canvas;
+    if (scopesUpdateTimerRef.current !== null) return;
+
+    const delay = Math.max(0, 180 - (performance.now() - lastScopesUpdateRef.current));
+    scopesUpdateTimerRef.current = window.setTimeout(() => {
+      scopesUpdateTimerRef.current = null;
+      const renderedCanvas = latestRenderedCanvasRef.current;
+      if (!renderedCanvas) return;
+      try {
+        const scopes = calculateRenderedScopes(renderedCanvas);
+        setHistogram(scopes.histogram);
+        setColorScopes(scopes.colorScopes);
+        lastScopesUpdateRef.current = performance.now();
+      } catch (error) {
+        console.error('[KuroLight] Failed to analyze the rendered preview:', error);
+      }
+    }, delay);
+  }, [setColorScopes, setHistogram]);
+
+  useEffect(() => {
+    if (scopesUpdateTimerRef.current !== null) {
+      window.clearTimeout(scopesUpdateTimerRef.current);
+      scopesUpdateTimerRef.current = null;
+    }
+    latestRenderedCanvasRef.current = null;
+    lastScopesUpdateRef.current = 0;
+    setHistogram({ r: [], g: [], b: [], lum: [], sample_count: 0 });
+    setColorScopes(null);
+  }, [activeAssetId, previewSource, setColorScopes, setHistogram]);
+
+  useEffect(() => () => {
+    if (scopesUpdateTimerRef.current !== null) {
+      window.clearTimeout(scopesUpdateTimerRef.current);
+    }
+  }, []);
+
+  const isWebGLReady = useLiveFilterCanvas({
+    imageSrc: previewSource,
+    editState: isCropActive && editState
+      ? {
+          ...editState,
+          geometry: { ...editState.geometry, crop_x: 0, crop_y: 0, crop_width: 1, crop_height: 1 },
+        }
+      : showOriginal ? null : editState,
     canvasRef,
-    onDimensionsLoaded: setImgDims,
+    onDimensionsLoaded: handleDimensionsLoaded,
+    onRendered: handleRendered,
   });
+
+  const photoW = (rotatedDims?.width ?? 1200) * (isCropActive ? 1 : appliedCropRect.w);
+  const photoH = (rotatedDims?.height ?? 800) * (isCropActive ? 1 : appliedCropRect.h);
+
+  const cropSession = useRef({ active: false, assetId: activeAssetId });
+  useEffect(() => {
+    const newSession = isCropActive && (
+      !cropSession.current.active || cropSession.current.assetId !== activeAssetId
+    );
+    if (newSession) onCropChange?.(appliedCropRect);
+    cropSession.current = { active: isCropActive, assetId: activeAssetId };
+  }, [activeAssetId, appliedCropRect, isCropActive, onCropChange]);
 
   // ── Custom Zoom + Pan ─────────────────────────────────────────────────
   const { stageRef, contentRef, state: zpState, fitToScreen, zoomTo100, zoomIn, zoomOut } =
-    useZoomPan({ photoDims: imgDims ?? null });
+    useZoomPan({ photoDims: { width: photoW, height: photoH } });
+
+  useEffect(() => {
+    const cancelSampling = () => {
+      if (!colorSampleCallbackRef.current) return;
+      colorSampleCallbackRef.current = null;
+      setIsSamplingColor(false);
+      window.dispatchEvent(new Event('kurolight:color-sample-cancelled'));
+    };
+    const requestSampling = (event: Event) => {
+      const request = event as CustomEvent<{ onSample?: (color: string) => void }>;
+      if (typeof request.detail?.onSample !== 'function') {
+        console.error('[KuroLight] Image color-sample request did not provide a callback.');
+        return;
+      }
+      if (colorSampleCallbackRef.current) cancelSampling();
+      colorSampleCallbackRef.current = request.detail.onSample;
+      setIsSamplingColor(true);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') cancelSampling();
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      const onSample = colorSampleCallbackRef.current;
+      if (!onSample || event.button !== 0) return;
+
+      const target = event.target;
+      if (target instanceof Element && target.closest('button, input, textarea, [role="button"]')) {
+        return;
+      }
+      const canvas = canvasRef.current;
+      const bounds = canvas?.getBoundingClientRect();
+      if (!canvas || !bounds || bounds.width <= 0 || bounds.height <= 0 || canvas.width <= 0 || canvas.height <= 0) {
+        console.error('[KuroLight] Cannot sample image color: the rendered image canvas is unavailable.');
+        cancelSampling();
+        return;
+      }
+      if (
+        event.clientX < bounds.left ||
+        event.clientX >= bounds.right ||
+        event.clientY < bounds.top ||
+        event.clientY >= bounds.bottom
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      const gl = canvas.getContext('webgl');
+      if (!gl || gl.isContextLost()) {
+        console.error('[KuroLight] Cannot sample image color: the WebGL context is unavailable.');
+        cancelSampling();
+        return;
+      }
+
+      const x = Math.min(
+        canvas.width - 1,
+        Math.floor(((event.clientX - bounds.left) / bounds.width) * canvas.width),
+      );
+      const y = Math.max(
+        0,
+        canvas.height - 1 - Math.floor(((event.clientY - bounds.top) / bounds.height) * canvas.height),
+      );
+      const pixel = new Uint8Array(4);
+      try {
+        gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      } catch (error) {
+        console.error('[KuroLight] Failed to read a pixel from the image canvas:', error);
+        cancelSampling();
+        return;
+      }
+      const readError = gl.getError();
+      if (readError !== gl.NO_ERROR) {
+        console.error(`[KuroLight] Failed to sample image color (WebGL error ${readError}).`);
+        cancelSampling();
+        return;
+      }
+
+      colorSampleCallbackRef.current = null;
+      setIsSamplingColor(false);
+      const hex = `#${Array.from(pixel.slice(0, 3), (channel) =>
+        channel.toString(16).padStart(2, '0')
+      ).join('')}`;
+      onSample(hex);
+    };
+
+    const stage = stageRef.current;
+    stage?.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener('kurolight:request-color-sample', requestSampling);
+    window.addEventListener('kurolight:cancel-color-sample', cancelSampling);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      stage?.removeEventListener('pointerdown', handlePointerDown, true);
+      window.removeEventListener('kurolight:request-color-sample', requestSampling);
+      window.removeEventListener('kurolight:cancel-color-sample', cancelSampling);
+      window.removeEventListener('keydown', handleKeyDown);
+      colorSampleCallbackRef.current = null;
+    };
+  }, [stageRef]);
 
   // ── Reset zoom whenever a new image is loaded ─────────────────────────
   const prevImageUrl = useRef<string | undefined>(undefined);
@@ -324,10 +589,6 @@ export const Viewport: React.FC<ViewportProps> = ({
     };
   }, [zoomIn, zoomOut, fitToScreen]);
 
-  // ── Photo container size ───────────────────────────────────────────────
-  const photoW = imgDims?.width  ?? 1200;
-  const photoH = imgDims?.height ?? 800;
-
   // Label position for Before/After badges
   const beforeBadgeRight = useMemo(
     () => `${((1 - splitRatio) * 100).toFixed(1)}%`,
@@ -367,17 +628,9 @@ export const Viewport: React.FC<ViewportProps> = ({
       <div
         ref={stageRef}
         className="relative w-full h-full overflow-hidden"
-        style={{ cursor: 'grab' }}
+        style={{ cursor: isSamplingColor ? 'crosshair' : 'grab' }}
       >
-        {!imageUrl ? (
-          /* Loading state */
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-obsidian-border border-t-obsidian-accent" />
-            <span className="text-xs font-medium text-obsidian-textSec">
-              Loading photo preview…
-            </span>
-          </div>
-        ) : (
+        {!previewSource ? null : (
           <>
             {/*
              * ── Content: transformed div ──
@@ -413,6 +666,30 @@ export const Viewport: React.FC<ViewportProps> = ({
                   flexShrink: 0,
                 }}
               >
+                <img
+                  src={imageUrl || thumbnailUrl}
+                  alt=""
+                  draggable={false}
+                  aria-hidden="true"
+                  style={{
+                    position: 'absolute',
+                    left: isCropActive ? 0 : `${-appliedCropRect.x / appliedCropRect.w * 100}%`,
+                    top: isCropActive ? 0 : `${-appliedCropRect.y / appliedCropRect.h * 100}%`,
+                    width: isCropActive ? '100%' : `${100 / appliedCropRect.w}%`,
+                    height: isCropActive ? '100%' : `${100 / appliedCropRect.h}%`,
+                    objectFit: 'fill',
+                    display:
+                      isWebGLReady &&
+                      loadedImageDims?.assetId === activeAssetId &&
+                      (rotation !== 0 ||
+                        geometry?.horizontal_flip ||
+                        geometry?.vertical_flip)
+                        ? 'none'
+                        : 'block',
+                    pointerEvents: 'none',
+                  }}
+                />
+
                 {/* ── WebGL canvas: edited "After" ── */}
                 <canvas
                   ref={canvasRef}
@@ -421,11 +698,45 @@ export const Viewport: React.FC<ViewportProps> = ({
                     inset: 0,
                     width: '100%',
                     height: '100%',
-                    display: 'block',
+                    display: isWebGLReady ? 'block' : 'none',
                     imageRendering: 'auto',
                     pointerEvents: 'none',
                   }}
                 />
+
+                <canvas
+                  ref={guideCanvasRef}
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 h-full w-full"
+                  style={{ zIndex: 25 }}
+                />
+
+                {isCropActive && (
+                  <CropOverlay
+                    rect={activeCropRect}
+                    aspectRatio={aspectRatio}
+                    imageWidth={rotatedDims?.width ?? photoW}
+                    imageHeight={rotatedDims?.height ?? photoH}
+                    onChange={(rect) => onCropChange?.(rect)}
+                  />
+                )}
+
+                {!isCropActive && (
+                  <MaskRetouchOverlay
+                    masks={masks}
+                    selectedMaskId={selectedMaskId}
+                    onMaskSelect={onMaskSelect}
+                    onMaskGeometryChange={onMaskGeometryChange}
+                    retouchSpots={retouchSpots}
+                    selectedRetouchSpotId={selectedRetouchSpotId}
+                    onRetouchSpotSelect={onRetouchSpotSelect}
+                    onRetouchSpotChange={onRetouchSpotChange}
+                    cropRect={appliedCropRect}
+                    imageWidth={imgDims?.width ?? photoW}
+                    imageHeight={imgDims?.height ?? photoH}
+                    geometry={geometry}
+                  />
+                )}
 
                 {/* ── "Before" image ──
                   * Shown when:
@@ -434,14 +745,15 @@ export const Viewport: React.FC<ViewportProps> = ({
                   */}
                 {(showOriginal || isSplitView) && (
                   <img
-                    src={beforeImageUrl || imageUrl}
+                    src={previewSource}
                     alt="Before"
                     draggable={false}
                     style={{
                       position: 'absolute',
-                      inset: 0,
-                      width: '100%',
-                      height: '100%',
+                      left: isCropActive ? 0 : `${-appliedCropRect.x / appliedCropRect.w * 100}%`,
+                      top: isCropActive ? 0 : `${-appliedCropRect.y / appliedCropRect.h * 100}%`,
+                      width: isCropActive ? '100%' : `${100 / appliedCropRect.w}%`,
+                      height: isCropActive ? '100%' : `${100 / appliedCropRect.h}%`,
                       objectFit: 'fill',
                       display: 'block',
                       userSelect: 'none',
@@ -551,9 +863,17 @@ export const Viewport: React.FC<ViewportProps> = ({
           onCycleGuideOrientation={() => setGuideOrientation((p) => getNextOrientation(p))}
           onResetCrop={() => onResetCrop?.()}
           onCancelCrop={() => onCancelCrop?.()}
-          onApplyCrop={() => onApplyCrop?.({ x: 0, y: 0, w: 1, h: 1 })}
+          onApplyCrop={() => onApplyCrop?.(activeCropRect)}
         />
       )}
     </div>
   );
 };
+
+function clampCrop(value: number): number {
+  return Math.max(0, Math.min(0.999, value));
+}
+
+function clampCropSize(value: number, origin: number): number {
+  return Math.max(0.001, Math.min(1 - clampCrop(origin), value));
+}

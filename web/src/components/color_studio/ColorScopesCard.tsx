@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Activity, BarChart2, Radio } from 'lucide-react';
 import { ColorScopes } from '../../types';
+import type { HistogramData } from '../../interfaces/scopes';
 
 interface ColorScopesCardProps {
-  histogram?: { r: number[]; g: number[]; b: number[]; lum: number[] };
+  histogram?: HistogramData;
   colorScopes?: ColorScopes | null;
 }
 
@@ -214,8 +215,15 @@ export const ColorScopesCard: React.FC<ColorScopesCardProps> = ({ histogram, col
           )}
         </div>
         <footer className="mt-2 flex items-center justify-between text-[9px] text-obsidian-textMut">
-          <span>{mode === 'waveform' ? 'Luminance by image position' : mode === 'vectorscope' ? 'Chroma density · Cb / Cr' : 'RGB distribution'}</span>
-          <span>After edits</span>
+          <span>
+            {mode === 'waveform'
+              ? 'Luminance by image position'
+              : mode === 'vectorscope'
+                ? 'Chroma density · Cb / Cr'
+                : 'RGB distribution'}
+            {histogram?.sample_count ? ` · ${histogram.sample_count.toLocaleString()} samples` : ''}
+          </span>
+          <span>Rendered preview</span>
         </footer>
       </div>
     </section>

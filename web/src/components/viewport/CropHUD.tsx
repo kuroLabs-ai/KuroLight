@@ -3,7 +3,6 @@ import { RotateCcw, X, Check, RefreshCw } from 'lucide-react';
 import {
   GUIDE_OPTIONS,
   type GuideLineType,
-  getNextOrientation,
 } from '@/utils/compositionGuides';
 
 export interface CropHUDProps {
@@ -75,6 +74,7 @@ export const CropHUD: React.FC<CropHUDProps> = ({
             title="Flip Orientation"
           >
             <RefreshCw size={12} />
+            <span className="ml-1 font-mono text-[9px]">#{guideOrientation + 1}/4</span>
           </button>
         )}
       </div>
