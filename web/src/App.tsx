@@ -1,5 +1,5 @@
-import React, { useCallback, Suspense, lazy } from 'react';
-import { Toaster } from 'sonner';
+import React, { useCallback, useState, Suspense, lazy } from 'react';
+import { toast, Toaster } from 'sonner';
 import { TopBar, Filmstrip } from '@/components';
 import { GalleryPage, DevelopPage } from '@/pages';
 import { ErrorBoundary } from '@/components/common/ErrorBoundary';
@@ -13,7 +13,12 @@ import {
 import { useAppStore } from '@/stores';
 import { DEFAULT_EDIT_STATE } from '@/constants';
 import { bridge } from '@/bridge';
-import type { WorkspaceId, EditState } from '@/types';
+import {
+  applyEditingPreset,
+  deleteEditingPreset,
+  saveEditingPreset,
+} from '@/utils/editingPresets';
+import type { WorkspaceId, EditState, ImageAsset } from '@/types';
 
 // Code-split secondary workspaces & heavy modals for instant startup
 const ColorStudioPage = lazy(() =>
@@ -41,6 +46,26 @@ const WorkspaceLoader: React.FC<{ label?: string }> = ({ label = 'Loading worksp
   </div>
 );
 
+function resolveFilmstripAssets(
+  assetIds: string[],
+  selectedAssets: ImageAsset[],
+  libraryAssets: ImageAsset[],
+): ImageAsset[] {
+  const availableAssets = new Map(
+    [...libraryAssets, ...selectedAssets].map((asset) => [asset.id, asset] as const),
+  );
+  return assetIds.map(
+    (assetId) =>
+      availableAssets.get(assetId) ?? {
+        id: assetId,
+        file_name: assetId,
+        source_path: '',
+        rating: 0,
+        flag: 'unflagged',
+      },
+  );
+}
+
 export const App: React.FC = () => {
   // Sync bridge events to Zustand store & prevent zoom
   useBridgeSync();
@@ -61,11 +86,17 @@ export const App: React.FC = () => {
     activeCollectionId,
     setActiveCollectionId,
     presets,
-    historyList,
-    activeHistoryIndex,
+    setPresets,
     activeAsset,
     editState,
     setEditState,
+    setEditStateWithHistory,
+    editUndoStack,
+    editRedoStack,
+    hasPendingEditHistory,
+    undoEditState,
+    redoEditState,
+    jumpEditHistory,
     setSelectedMaskId,
     selectedMaskId,
     setSelectedRetouchSpotId,
@@ -85,6 +116,8 @@ export const App: React.FC = () => {
     isSettingsOpen,
     setIsSettingsOpen,
   } = useAppStore();
+  const [selectedFilmstripAssets, setSelectedFilmstripAssets] =
+    useState<ImageAsset[] | null>(null);
 
   // Resizable Panels
   const {
@@ -125,24 +158,69 @@ export const App: React.FC = () => {
   const handleWorkspaceChange = useCallback(
     (nextWs: WorkspaceId) => {
       setWorkspace(nextWs);
+      if (nextWs === 'library') setSelectedFilmstripAssets(null);
+      const selectedAssets = selectedFilmstripAssets ?? [];
+      if (nextWs === 'develop' && selectedAssets.length > 1) {
+        const selectedActiveId =
+          gallerySelectedAssetId &&
+          selectedAssets.some((asset) => asset.id === gallerySelectedAssetId)
+            ? gallerySelectedAssetId
+            : selectedAssets[0].id;
+        if (selectedActiveId !== gallerySelectedAssetId) {
+          setGallerySelectedAssetId(selectedActiveId);
+        }
+        if (selectedActiveId !== activeAsset?.id) {
+          bridge.openInDevelop(selectedActiveId);
+        } else {
+          bridge.switchWorkspace(nextWs);
+        }
+        return;
+      }
       bridge.switchWorkspace(nextWs);
       if (nextWs !== 'library' && gallerySelectedAssetId && gallerySelectedAssetId !== activeAsset?.id) {
         bridge.selectAsset(gallerySelectedAssetId);
       }
     },
-    [gallerySelectedAssetId, activeAsset?.id, setWorkspace]
+    [
+      activeAsset?.id,
+      gallerySelectedAssetId,
+      selectedFilmstripAssets,
+      setGallerySelectedAssetId,
+      setWorkspace,
+    ]
   );
+
+  const handleSaveEdits = useCallback(async () => {
+    const { activeAsset: currentAsset, editState: currentEditState } = useAppStore.getState();
+    if (!currentAsset || currentEditState.asset_id !== currentAsset.id) {
+      toast.error('No photo selected', { description: 'Select a photo before saving edits.' });
+      return;
+    }
+
+    try {
+      await bridge.saveEditState(currentEditState);
+      toast.success(
+        bridge.hasNativeApi ? 'Edits saved to the catalog' : 'Edits saved in this browser'
+      );
+    } catch (error) {
+      console.error('[KuroLight] Could not save photo edits:', error);
+      toast.error('Could not save edits', {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, []);
 
   // Global Keyboard Shortcuts Hook
   useGlobalShortcuts({
     toggleRightPanelCollapse,
     onWorkspaceChange: handleWorkspaceChange,
+    onSaveEdits: handleSaveEdits,
   });
 
   // Edit change handler
   const handleEditChange = useCallback(
     (newState: EditState) => {
-      setEditState(newState);
+      setEditStateWithHistory(newState);
       setSelectedMaskId(
         newState.masks?.some((mask) => mask.id === selectedMaskId)
           ? selectedMaskId
@@ -153,9 +231,52 @@ export const App: React.FC = () => {
           ? selectedRetouchSpotId
           : newState.retouch_spots?.[0]?.id ?? null
       );
-      bridge.updateEditState(newState);
     },
-    [selectedMaskId, selectedRetouchSpotId, setEditState, setSelectedMaskId, setSelectedRetouchSpotId]
+    [
+      selectedMaskId,
+      selectedRetouchSpotId,
+      setEditStateWithHistory,
+      setSelectedMaskId,
+      setSelectedRetouchSpotId,
+    ]
+  );
+
+  const handleApplyPreset = useCallback(
+    (presetId: string) => {
+      const preset = presets.find((item) => item.id === presetId);
+      if (!preset) {
+        toast.error('Preset unavailable', { description: 'The selected preset could not be found.' });
+        return;
+      }
+      handleEditChange(applyEditingPreset(useAppStore.getState().editState, preset));
+    },
+    [handleEditChange, presets]
+  );
+
+  const handleSavePreset = useCallback(
+    async (name: string, category: string) => {
+      if (!useAppStore.getState().activeAsset) {
+        throw new Error('Select a photo before saving a preset');
+      }
+      const nextPresets = await saveEditingPreset(name, category, useAppStore.getState().editState);
+      setPresets(nextPresets);
+      toast.success(`Saved preset "${name.trim()}"`);
+    },
+    [setPresets]
+  );
+
+  const handleDeletePreset = useCallback(
+    async (presetId: string) => {
+      const nextPresets = await deleteEditingPreset(presetId);
+      setPresets(nextPresets);
+      toast.success('Preset deleted');
+    },
+    [setPresets]
+  );
+
+  const handleSnapshotChange = useCallback(
+    (nextEditState: EditState) => setEditState(nextEditState),
+    [setEditState]
   );
 
   const requestColorSample = useCallback((onSample: (color: string) => void) => {
@@ -171,8 +292,7 @@ export const App: React.FC = () => {
   const handleResetAll = () => {
     if (activeAsset) {
       const reset = { ...DEFAULT_EDIT_STATE, asset_id: activeAsset.id };
-      setEditState(reset);
-      bridge.saveEditState(reset);
+      setEditStateWithHistory(reset);
     }
   };
 
@@ -205,11 +325,11 @@ export const App: React.FC = () => {
       <TopBar
         currentWorkspace={workspace}
         onWorkspaceChange={handleWorkspaceChange}
-        canUndo={activeHistoryIndex >= 0}
-        canRedo={activeHistoryIndex < historyList.length - 1}
-        onUndo={() => bridge.undo()}
-        onRedo={() => bridge.redo()}
-        onSave={() => bridge.saveEditState(editState)}
+        canUndo={editUndoStack.length > 0 || hasPendingEditHistory}
+        canRedo={editRedoStack.length > 0}
+        onUndo={undoEditState}
+        onRedo={redoEditState}
+        onSave={() => void handleSaveEdits()}
         onOpenAI={() => setIsAIPopupOpen(!isAIPopupOpen)}
         isAIOpen={isAIPopupOpen}
         onOpenSettings={() => setIsSettingsOpen(true)}
@@ -280,9 +400,32 @@ export const App: React.FC = () => {
             activeCollectionId={activeCollectionId}
             onActiveCollectionChange={setActiveCollectionId}
             onSelectedAssetChange={setGallerySelectedAssetId}
+            onGallerySelectionChange={(assetIds, selectedAssets) => {
+              setSelectedFilmstripAssets(
+                assetIds.length > 1
+                  ? resolveFilmstripAssets(assetIds, selectedAssets, assets)
+                  : null,
+              );
+            }}
             onOpenInLightbox={(assetId) => {
+              if (selectedFilmstripAssets?.some((asset) => asset.id === assetId)) {
+                setGallerySelectedAssetId(assetId);
+                bridge.openInDevelop(assetId);
+                setWorkspace('develop');
+                return;
+              }
+              setSelectedFilmstripAssets(null);
               setGallerySelectedAssetId(assetId);
               bridge.openInDevelop(assetId);
+              setWorkspace('develop');
+            }}
+            onOpenSelectedInLightbox={(assetIds, selectedAssets) => {
+              if (assetIds.length === 0) return;
+              setSelectedFilmstripAssets(
+                resolveFilmstripAssets(assetIds, selectedAssets, assets),
+              );
+              setGallerySelectedAssetId(assetIds[0]);
+              bridge.openInDevelop(assetIds[0]);
               setWorkspace('develop');
             }}
           />
@@ -311,8 +454,13 @@ export const App: React.FC = () => {
               bridge.toggleFilmstrip();
             }}
             presets={presets}
-            historyList={historyList}
-            activeHistoryIndex={activeHistoryIndex}
+            onApplyPreset={handleApplyPreset}
+            onSavePreset={handleSavePreset}
+            onDeletePreset={handleDeletePreset}
+            editUndoStack={editUndoStack}
+            editRedoStack={editRedoStack}
+            onJumpEditHistory={jumpEditHistory}
+            onSnapshotChange={handleSnapshotChange}
             histogram={histogram}
             rightPanelWidth={rightPanelWidth}
             isRightPanelCollapsed={isRightPanelCollapsed}
@@ -370,9 +518,15 @@ export const App: React.FC = () => {
               activeAsset={activeAsset}
               editState={editState}
               onChange={handleEditChange}
-              historyList={historyList}
-              activeHistoryIndex={activeHistoryIndex}
+              editUndoStack={editUndoStack}
+              editRedoStack={editRedoStack}
+              hasPendingEditHistory={hasPendingEditHistory}
+              onUndo={undoEditState}
+              onRedo={redoEditState}
+              onJumpEditHistory={jumpEditHistory}
               presets={presets}
+              onApplyPreset={handleApplyPreset}
+              onSavePreset={handleSavePreset}
               histogram={histogram}
             />
           </Suspense>
@@ -386,6 +540,7 @@ export const App: React.FC = () => {
         activeAsset={activeAsset}
         activeCollectionId={activeCollectionId}
         collectionAssetCount={activeCollection?.asset_count}
+        selectedAssets={selectedFilmstripAssets}
         activeAssetId={activeAsset?.id}
         onSelectAsset={(assetId) => bridge.selectAsset(assetId)}
         isVisible={showFilmstrip}

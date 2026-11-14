@@ -72,11 +72,9 @@ class BootstrapWorker(QThread):
                 edit_state_repo=project_service.edit_state_repo
             )
 
-            # Stage 4 — presets & export
+            # Stage 4 — export
             self.stage_changed.emit(4)
-            from kurolight.services.preset_service import PresetService
             from kurolight.services.export_service import ExportService
-            preset_service = PresetService(preset_repo=project_service.preset_repo)
             export_service = ExportService()
 
             # Stage 5 — app state & command dispatcher
@@ -97,7 +95,6 @@ class BootstrapWorker(QThread):
                 "project_service":    project_service,
                 "library_service":    library_service,
                 "editing_service":    editing_service,
-                "preset_service":     preset_service,
                 "export_service":     export_service,
                 "command_dispatcher": command_dispatcher,
             })

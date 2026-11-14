@@ -124,6 +124,54 @@ def test_initial_sync_selects_from_a_bounded_catalog_page():
     assert selected == ["photo"]
 
 
+def test_select_asset_emits_thumbnail_and_defers_full_render(tmp_path, monkeypatch):
+    source_path = tmp_path / "photo.jpg"
+    source_path.write_bytes(b"image")
+    asset = SimpleNamespace(
+        id="photo",
+        file_name="photo.jpg",
+        source_path=source_path,
+    )
+    state = SimpleNamespace(
+        asset_id="photo",
+        model_dump=lambda: {"asset_id": "photo"},
+    )
+    emitted = []
+    scheduled = []
+    bridge = PyBridge.__new__(PyBridge)
+    bridge._save_timer = SimpleNamespace(isActive=lambda: False)
+    bridge._render_timer = SimpleNamespace(start=scheduled.append)
+    bridge._missing_source_notified = set()
+    bridge.library_service = SimpleNamespace(
+        asset_repo=SimpleNamespace(get_by_id=lambda _asset_id: asset)
+    )
+    bridge.app_state = SimpleNamespace(
+        set_active_asset=lambda _asset: None,
+        set_current_edit_state=lambda _state: None,
+    )
+    bridge.editing_service = SimpleNamespace(get_edit_state=lambda _asset_id: state)
+    bridge._edit_start_state = None
+    bridge._restore_asset_history = lambda _asset_id: None
+    bridge._asset_to_dict = lambda _asset: {"id": "photo"}
+    bridge._get_thumbnail_data_url = lambda _asset: "data:image/jpeg;base64,thumb"
+    bridge.asset_selected = SimpleNamespace(emit=lambda *args: emitted.append(args))
+
+    class NoOpThread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr("kurolight.ui.web_bridge.threading.Thread", NoOpThread)
+
+    bridge.select_asset("photo")
+
+    asset_payload = json.loads(emitted[0][0])
+    assert asset_payload["thumbnail_url"] == "data:image/jpeg;base64,thumb"
+    assert scheduled == [0]
+
+
 def test_asset_page_keeps_full_metadata_for_loaded_gallery_rows():
     asset = SimpleNamespace(
         id="photo",

@@ -1,8 +1,4 @@
-"""KuroLight Web Bridge — pywebview bridge connecting React to Python.
-
-Exposes Python core services (editing, library, collections, RAW pipeline, OpenCV, SQLite, Presets, History, AI)
-to the high-performance React + Tailwind frontend.
-"""
+"""KuroLight Web Bridge — pywebview bridge connecting React to Python."""
 
 from __future__ import annotations
 
@@ -134,7 +130,6 @@ class PyBridge:
         "trash_count_updated",
         "library_loading",
         "collections_updated",
-        "presets_updated",
         "history_updated",
         "asset_selected",
         "filmstrip_toggled",
@@ -150,7 +145,6 @@ class PyBridge:
         library_service: Any,
         editing_service: Any,
         command_dispatcher: Any,
-        preset_service: Any,
         export_service: Any = None,
         history_repository: Any = None,
         parent_widget: Any = None,
@@ -160,7 +154,6 @@ class PyBridge:
         self.library_service = library_service
         self.editing_service = editing_service
         self.command_dispatcher = command_dispatcher
-        self.preset_service = preset_service
         self.export_service = export_service
         self.history_repository = history_repository
         self.export_job_manager = ExportJobManager(export_service) if export_service else None
@@ -373,13 +366,12 @@ class PyBridge:
     # ── Initial Sync ───────────────────────────────────────────────────────
 
     def initial_sync(self) -> None:
-        """Push initial library assets, collections, presets, and active asset state to the webview."""
+        """Push initial library assets, collections, and active asset state to the webview."""
         self._set_library_loading(True, "Loading photo library…")
         try:
             assets = self._push_assets()
             self._push_trash_count()
             self._push_collections()
-            self._push_presets()
             self._emit_history()
             if assets:
                 active_id = self.app_state.active_asset.id if self.app_state.active_asset else assets[0].id
@@ -596,20 +588,6 @@ class PyBridge:
         ]
         self.collections_updated.emit(json.dumps(colls_payload))
 
-    def _push_presets(self) -> None:
-        if not self.preset_service:
-            return
-        presets = self.preset_service.get_presets()
-        payload = []
-        for p in presets:
-            payload.append({
-                "id": p.id,
-                "name": p.name,
-                "category": p.category,
-                "parameters": p.parameters if hasattr(p, "parameters") else {},
-            })
-        self.presets_updated.emit(json.dumps(payload))
-
     def _get_thumbnail_data_url(self, asset: ImageAsset) -> str:
         try:
             thumbnail = self.library_service.get_thumbnail_bytes(asset, size=240)
@@ -658,7 +636,9 @@ class PyBridge:
         self._restore_asset_history(asset_id)
 
         state_dict = edit_state.model_dump()
-        self.asset_selected.emit(json.dumps(self._asset_to_dict(asset)), json.dumps(state_dict))
+        asset_data = self._asset_to_dict(asset)
+        asset_data["thumbnail_url"] = self._get_thumbnail_data_url(asset)
+        self.asset_selected.emit(json.dumps(asset_data), json.dumps(state_dict))
 
         # Render unedited 'Before' preview
         if not asset.source_path.is_file():
@@ -678,8 +658,9 @@ class PyBridge:
 
         self._missing_source_notified.discard(asset.id)
 
-        # 1. Render active preview & histogram FIRST so user sees photo immediately without delay
-        self._do_render_preview()
+        # Render the full preview after returning control so the cached thumbnail
+        # can appear and the user can start editing without waiting on processing.
+        self._render_timer.start(0)
 
         # 2. Render unedited 'Before' preview in background thread so it never blocks active photo display
         def _render_before_async() -> None:
@@ -928,41 +909,6 @@ class PyBridge:
             self.notification.emit("Collection Updated", f"Removed {len(ids)} photo(s) from collection", "info")
         except Exception as e:
             logger.error(f"Remove from collection error: {e}")
-
-    # ── Preset API ─────────────────────────────────────────────────────────
-
-    def apply_preset(self, preset_id_or_name: str) -> None:
-        """Apply built-in or user preset recipe."""
-        if not self.preset_service or not self.app_state.current_edit_state:
-            return
-        presets = self.preset_service.get_presets()
-        matching = [p for p in presets if p.id == preset_id_or_name or p.name == preset_id_or_name]
-        if matching:
-            p = matching[0]
-            new_state = self.preset_service.apply_preset(p, self.app_state.current_edit_state)
-            self.app_state.set_current_edit_state(new_state)
-            self._do_render_preview()
-            self._do_commit_edit_state()
-            asset = self.app_state.active_asset
-            if asset:
-                self.asset_selected.emit(json.dumps({"id": asset.id, "file_name": asset.file_name}), json.dumps(new_state.model_dump()))
-            self.notification.emit("Preset Applied", f"Applied preset '{p.name}'", "info")
-
-    def save_preset(self, name: str, category: str) -> None:
-        """Save current edit parameters as new preset."""
-        if not self.preset_service or not self.app_state.current_edit_state:
-            return
-        self.preset_service.create_preset_from_edit_state(name, category, self.app_state.current_edit_state)
-        self._push_presets()
-        self.notification.emit("Preset Saved", f"Saved preset '{name}'", "success")
-
-    def delete_preset(self, preset_id: str) -> None:
-        """Delete user preset."""
-        if not self.preset_service:
-            return
-        self.preset_service.delete_preset(preset_id)
-        self._push_presets()
-        self.notification.emit("Preset Deleted", "Preset removed", "info")
 
     # ── History Jump API ───────────────────────────────────────────────────
 
@@ -1500,44 +1446,23 @@ class PyBridge:
     # ── Edit State & Rendering ─────────────────────────────────────────────
 
     def update_edit_state(self, state_json: str) -> None:
-        """Called from JS on every slider drag (throttled live preview)."""
-        try:
-            data = json.loads(state_json)
-            curr = self.app_state.current_edit_state
-            if not curr:
-                return
-
-            start_state = (
-                curr.model_copy(deep=True)
-                if self._edit_start_state is None
-                else None
-            )
-            curr = self._apply_dict_to_edit_state(curr, data)
-            if self._edit_start_state is None:
-                self._edit_start_state = start_state
-
-            self._pending_edit_state = curr
-            self.app_state.set_current_edit_state(curr)
-
-            if not self._render_timer.isActive():
-                self._render_timer.start(20)
-
-            # Schedule disk save and undo push
-            self._save_timer.start(300)
-
-        except Exception as e:
-            logger.exception("Error updating edit state")
-            self.notification.emit("Edit Not Saved", str(e), "error")
+        """Web-first mode: browser-side engine owns live photo adjustments."""
+        return
 
     def save_edit_state(self, state_json: str) -> None:
-        """Called when user releases slider or explicitly saves."""
+        """Persist browser-edited values for an asset in the Python catalog."""
         try:
-            self.update_edit_state(state_json)
-            self._save_timer.stop()
-            self._do_commit_edit_state()
-        except Exception as e:
-            logger.exception("Error saving edit state")
-            self.notification.emit("Edit Not Saved", str(e), "error")
+            data = json.loads(state_json)
+            state = EditState.model_validate(data)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid edit state payload: {exc}") from exc
+
+        if not state.asset_id:
+            raise ValueError("Cannot save edits without an asset ID")
+        if not self.library_service.asset_repo.get_by_id(state.asset_id):
+            raise ValueError(f"Cannot save edits for unknown asset {state.asset_id}")
+
+        self.editing_service.save_edit_state(state)
 
     def import_files(self) -> None:
         """Open native file dialog and import photos."""
@@ -1754,50 +1679,6 @@ class PyBridge:
         self.workspace_changed.emit(workspace_id)
         if workspace_id == "color_studio":
             self._render_timer.start()
-
-    def save_snapshot(self, name: str) -> None:
-        curr = self.app_state.current_edit_state
-        if curr:
-            curr.create_snapshot(name)
-            if not self._save_state_with_notification(curr):
-                return
-            asset = self.app_state.active_asset
-            if asset:
-                self.asset_selected.emit(
-                    json.dumps({"id": asset.id, "file_name": asset.file_name}),
-                    json.dumps(curr.model_dump()),
-                )
-            self.notification.emit("Snapshot Created", f"Saved snapshot '{name}'", "info")
-
-    def restore_snapshot(self, name: str) -> None:
-        curr = self.app_state.current_edit_state
-        if curr and name in curr.snapshots:
-            self._edit_start_state = curr.model_copy(deep=True)
-            restored = curr.restore_snapshot(name)
-            self.app_state.set_current_edit_state(restored)
-            self._do_render_preview()
-            self._do_commit_edit_state()
-            asset = self.app_state.active_asset
-            if asset:
-                self.asset_selected.emit(
-                    json.dumps({"id": asset.id, "file_name": asset.file_name}),
-                    json.dumps(restored.model_dump()),
-                )
-
-    def delete_snapshot(self, name: str) -> None:
-        curr = self.app_state.current_edit_state
-        if curr:
-            previous = curr.model_copy(deep=True)
-            curr.delete_snapshot(name)
-            if not self._save_state_with_notification(curr):
-                self.app_state.set_current_edit_state(previous)
-                return
-            asset = self.app_state.active_asset
-            if asset:
-                self.asset_selected.emit(
-                    json.dumps({"id": asset.id, "file_name": asset.file_name}),
-                    json.dumps(curr.model_dump()),
-                )
 
     # ── Crop Tool API ──────────────────────────────────────────────────────
 

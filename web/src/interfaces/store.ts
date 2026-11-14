@@ -2,7 +2,7 @@ import { ImageAsset } from './asset';
 import { Collection } from './collection';
 import { EditState } from './edit';
 import { Preset } from './preset';
-import { ColorScopes } from './scopes';
+import { ColorScopes, HistogramData } from './scopes';
 import { WorkspaceId } from '../types/workspace';
 
 export interface LibraryLoadingState {
@@ -51,13 +51,17 @@ export interface AppState {
   // Active Asset & Edit State
   activeAsset: ImageAsset | null;
   editState: EditState;
+  editUndoStack: EditState[];
+  editRedoStack: EditState[];
+  editHistoryByAsset: Record<string, { undo: EditState[]; redo: EditState[] }>;
+  hasPendingEditHistory: boolean;
   historyList: string[];
   activeHistoryIndex: number;
 
   // Display & Scopes
   imageUrl: string;
   beforeImageUrl: string;
-  histogram: { r: number[]; g: number[]; b: number[]; lum: number[] };
+  histogram: HistogramData;
   colorScopes: ColorScopes | null;
 
   // Tools & Selection
@@ -85,12 +89,16 @@ export interface AppState {
   setPresets: (presets: Preset[]) => void;
   setActiveAsset: (asset: ImageAsset | null) => void;
   setEditState: (editState: EditState) => void;
+  setEditStateWithHistory: (editState: EditState) => void;
+  undoEditState: () => void;
+  redoEditState: () => void;
+  jumpEditHistory: (index: number) => void;
   updateEditState: (partial: Partial<EditState>) => void;
   setHistoryList: (history: string[]) => void;
   setActiveHistoryIndex: (index: number) => void;
   setImageUrl: (url: string) => void;
   setBeforeImageUrl: (url: string) => void;
-  setHistogram: (histogram: { r: number[]; g: number[]; b: number[]; lum: number[] }) => void;
+  setHistogram: (histogram: HistogramData) => void;
   setColorScopes: (scopes: ColorScopes | null) => void;
   setSelectedMaskId: (id: string | null) => void;
   setSelectedRetouchSpotId: (id: string | null) => void;

@@ -70,7 +70,7 @@ class SplashScreen(QWidget):
         ("Opening project vault…",                  28),
         ("Loading asset library…",                  48),
         ("Preparing editing engine…",               65),
-        ("Loading presets & export service…",       80),
+        ("Preparing export service…",               80),
         ("Building interface…",                     94),
         ("Ready.",                                  100),
     ]

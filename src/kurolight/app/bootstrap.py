@@ -11,7 +11,6 @@ from kurolight.infrastructure.logging import get_logger, setup_logging
 from kurolight.services.editing_service import EditingService
 from kurolight.services.export_service import ExportService
 from kurolight.services.library_service import LibraryService
-from kurolight.services.preset_service import PresetService
 from kurolight.services.project_service import ProjectService
 
 logger = get_logger("bootstrap")
@@ -33,7 +32,7 @@ def bootstrap_services(db_path: Optional[Path] = None) -> Dict:
 
     Returns:
         dict with keys: app_state, project_service, library_service,
-        editing_service, preset_service, export_service, command_dispatcher
+        editing_service, export_service, command_dispatcher
     """
     # 1. Initialize Logging
     setup_logging()
@@ -62,7 +61,6 @@ def bootstrap_services(db_path: Optional[Path] = None) -> Dict:
         collection_repo=project_service.collection_repo,
     )
     editing_service = EditingService(edit_state_repo=project_service.edit_state_repo)
-    preset_service = PresetService(preset_repo=project_service.preset_repo)
     export_service = ExportService()
 
     # 5. Initialize State & Command Dispatcher
@@ -78,7 +76,6 @@ def bootstrap_services(db_path: Optional[Path] = None) -> Dict:
         "project_service": project_service,
         "library_service": library_service,
         "editing_service": editing_service,
-        "preset_service": preset_service,
         "export_service": export_service,
         "command_dispatcher": command_dispatcher,
     }

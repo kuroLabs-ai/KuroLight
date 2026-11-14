@@ -64,7 +64,7 @@ export interface HSLSettings {
 
 export interface ColorWheelValue {
   hue: number; // 0 - 360
-  saturation: number; // 0 - 100
+  saturation: number; // 0 - 1
   luminance: number; // -100 to 100
 }
 
@@ -126,7 +126,7 @@ export interface RetouchSpot {
   enabled: boolean;
 }
 
-export interface EditState {
+export interface EditSnapshot {
   asset_id: string;
   exposure: ExposureSettings;
   white_balance: WhiteBalanceSettings;
@@ -138,6 +138,9 @@ export interface EditState {
   tone_curves?: ToneCurvesSettings;
   masks?: AdjustmentMask[];
   retouch_spots?: RetouchSpot[];
-  snapshots?: Record<string, unknown>;
   custom_metadata?: Record<string, unknown>;
+}
+
+export interface EditState extends EditSnapshot {
+  snapshots?: Record<string, EditSnapshot>;
 }

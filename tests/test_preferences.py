@@ -14,14 +14,11 @@ def bridge_instance(tmp_path: Path):
     mock_lib.get_asset_count.return_value = 42
     mock_edit = MagicMock()
     mock_disp = MagicMock()
-    mock_preset = MagicMock()
-
     bridge = PyBridge(
         app_state=mock_app_state,
         library_service=mock_lib,
         editing_service=mock_edit,
         command_dispatcher=mock_disp,
-        preset_service=mock_preset,
     )
     return bridge
 

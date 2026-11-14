@@ -49,6 +49,40 @@ def test_bridge_edit_update_validates_without_mutating_current_state():
     assert current.exposure.exposure == 0
 
 
+def test_web_bridge_save_edit_state_persists_values_in_catalog(tmp_path):
+    database_path = tmp_path / "catalog.sqlite"
+    source_path = tmp_path / "photo.png"
+    Image.new("RGB", (2, 2), color=(20, 40, 60)).save(source_path)
+
+    project_service = ProjectService.open_or_create_project(database_path)
+    try:
+        project = project_service.get_current_project()
+        assert project is not None
+        asset = ImageAsset.create(source_path, project.id)
+        project_service.asset_repo.save(asset)
+
+        payload = EditState(asset_id=asset.id).model_dump(mode="json")
+        payload["exposure"]["exposure"] = 1.25
+        payload["color_grading"]["gain"]["saturation"] = 0.75
+        payload["tone_curves"]["rgb_points"] = [
+            {"x": 0.0, "y": 0.0},
+            {"x": 0.4, "y": 0.65},
+            {"x": 1.0, "y": 1.0},
+        ]
+
+        bridge = PyBridge.__new__(PyBridge)
+        bridge.library_service = project_service
+        bridge.editing_service = EditingService(project_service.edit_state_repo)
+        bridge.save_edit_state(json.dumps(payload))
+
+        restored = EditingService(project_service.edit_state_repo).get_edit_state(asset.id)
+        assert restored.exposure.exposure == 1.25
+        assert restored.color_grading.gain.saturation == 0.75
+        assert restored.tone_curves.rgb_points[1].y == 0.65
+    finally:
+        project_service.db_manager.close_thread_connection()
+
+
 def test_dispatcher_supports_typed_registry_and_bridge_dispatch(capsys):
     state = EditState(asset_id="photo-42")
     dispatcher = CommandDispatcher()

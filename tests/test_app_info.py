@@ -11,14 +11,11 @@ def test_get_app_info():
     mock_lib = MagicMock()
     mock_edit = MagicMock()
     mock_disp = MagicMock()
-    mock_preset = MagicMock()
-
     bridge = PyBridge(
         app_state=mock_app_state,
         library_service=mock_lib,
         editing_service=mock_edit,
         command_dispatcher=mock_disp,
-        preset_service=mock_preset,
     )
     raw = bridge.get_app_info()
     data = json.loads(raw)
@@ -40,14 +37,11 @@ def test_open_external_url():
     mock_lib = MagicMock()
     mock_edit = MagicMock()
     mock_disp = MagicMock()
-    mock_preset = MagicMock()
-
     bridge = PyBridge(
         app_state=mock_app_state,
         library_service=mock_lib,
         editing_service=mock_edit,
         command_dispatcher=mock_disp,
-        preset_service=mock_preset,
     )
 
     # Disallow invalid or dangerous schemes

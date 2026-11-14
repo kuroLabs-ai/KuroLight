@@ -3,7 +3,7 @@ import { ImageAsset } from './asset';
 import { Collection } from './collection';
 import { EditState } from './edit';
 import { Preset } from './preset';
-import { ColorScopes } from './scopes';
+import { ColorScopes, HistogramData } from './scopes';
 
 export interface DevelopPageProps {
   imageUrl: string;
@@ -23,9 +23,14 @@ export interface DevelopPageProps {
   isFilmstripVisible: boolean;
   onToggleFilmstrip: () => void;
   presets: Preset[];
-  historyList: string[];
-  activeHistoryIndex: number;
-  histogram: { r: number[]; g: number[]; b: number[]; lum: number[] };
+  onApplyPreset: (presetId: string) => void;
+  onSavePreset: (name: string, category: string) => void | Promise<void>;
+  onDeletePreset: (presetId: string) => void | Promise<void>;
+  onSnapshotChange: (editState: EditState) => void;
+  editUndoStack: EditState[];
+  editRedoStack: EditState[];
+  onJumpEditHistory: (index: number) => void;
+  histogram: HistogramData;
   rightPanelWidth: number;
   isRightPanelCollapsed: boolean;
   onRightPanelResize: (delta: number) => void;
@@ -46,7 +51,9 @@ export interface GalleryPageProps {
   activeCollectionId?: string | null;
   onActiveCollectionChange?: (id: string | null) => void;
   onSelectedAssetChange?: (assetId: string | null) => void;
+  onGallerySelectionChange?: (assetIds: string[], selectedAssets: ImageAsset[]) => void;
   onOpenInLightbox?: (assetId: string) => void;
+  onOpenSelectedInLightbox?: (assetIds: string[], selectedAssets: ImageAsset[]) => void;
 }
 
 export interface ColorStudioPageProps {
@@ -55,7 +62,7 @@ export interface ColorStudioPageProps {
   activeAsset: ImageAsset | null;
   editState: EditState;
   onChange: (state: EditState) => void;
-  histogram: { r: number[]; g: number[]; b: number[]; lum: number[] };
+  histogram: HistogramData;
   colorScopes: ColorScopes | null;
   selectedRetouchSpotId?: string | null;
   onRetouchSpotSelect?: (spotId: string | null) => void;
@@ -75,8 +82,14 @@ export interface VisualFlowPageProps {
   activeAsset: ImageAsset | null;
   editState: EditState;
   onChange: (state: EditState) => void;
-  historyList: string[];
-  activeHistoryIndex: number;
+  editUndoStack: EditState[];
+  editRedoStack: EditState[];
+  hasPendingEditHistory: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  onJumpEditHistory: (index: number) => void;
   presets: Preset[];
-  histogram: { r: number[]; g: number[]; b: number[]; lum: number[] };
+  onApplyPreset: (presetId: string) => void;
+  onSavePreset: (name: string, category: string) => void | Promise<void>;
+  histogram: HistogramData;
 }

@@ -24,7 +24,6 @@ class WebWindow:
         library_service: Any,
         editing_service: Any,
         command_dispatcher: Any,
-        preset_service: Any,
         export_service: Any,
         dev_url: Optional[str] = None,
     ) -> None:
@@ -33,7 +32,6 @@ class WebWindow:
             library_service=library_service,
             editing_service=editing_service,
             command_dispatcher=command_dispatcher,
-            preset_service=preset_service,
             export_service=export_service,
             history_repository=project_service.edit_history_repo,
         )

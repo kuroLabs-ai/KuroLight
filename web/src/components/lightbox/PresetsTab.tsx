@@ -1,13 +1,21 @@
 import React, { useState, useMemo } from 'react';
 import { Preset } from '../../types';
-import { bridge } from '../../bridge';
+import { toast } from 'sonner';
 import { Star, Plus, Trash2, Check, Sparkles, Search, X } from 'lucide-react';
 
 interface PresetsTabProps {
   presets: Preset[];
+  onApplyPreset: (presetId: string) => void;
+  onSavePreset: (name: string, category: string) => void | Promise<void>;
+  onDeletePreset: (presetId: string) => void | Promise<void>;
 }
 
-export const PresetsTab: React.FC<PresetsTabProps> = ({ presets }) => {
+export const PresetsTab: React.FC<PresetsTabProps> = ({
+  presets,
+  onApplyPreset,
+  onSavePreset,
+  onDeletePreset,
+}) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -41,20 +49,26 @@ export const PresetsTab: React.FC<PresetsTabProps> = ({ presets }) => {
     });
   }, [presets, selectedCategory, searchQuery]);
 
-  const handleApply = (name: string) => {
-    bridge.applyPreset(name);
-    setLastAppliedPreset(name);
+  const handleApply = (preset: Preset) => {
+    onApplyPreset(preset.id);
+    setLastAppliedPreset(preset.id);
     setTimeout(() => {
-      setLastAppliedPreset((curr) => (curr === name ? null : curr));
+      setLastAppliedPreset((curr) => (curr === preset.id ? null : curr));
     }, 2000);
   };
 
-  const handleSavePreset = (e: React.FormEvent) => {
+  const handleSavePreset = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newPresetName.trim()) {
-      bridge.savePreset(newPresetName.trim(), newPresetCategory.trim() || 'User');
+    if (!newPresetName.trim()) return;
+    try {
+      await onSavePreset(newPresetName.trim(), newPresetCategory.trim() || 'User');
       setNewPresetName('');
       setIsSaving(false);
+    } catch (error) {
+      console.error('[KuroLight] Could not save editing preset:', error);
+      toast.error('Could not save preset', {
+        description: error instanceof Error ? error.message : 'Browser preset storage failed.',
+      });
     }
   };
 
@@ -188,11 +202,11 @@ export const PresetsTab: React.FC<PresetsTabProps> = ({ presets }) => {
       ) : (
         <div className="space-y-1.5">
           {filteredPresets.map((preset) => {
-            const isApplied = lastAppliedPreset === preset.name;
+            const isApplied = lastAppliedPreset === preset.id;
             return (
               <div
                 key={preset.id}
-                onClick={() => handleApply(preset.name)}
+                onClick={() => handleApply(preset)}
                 className={`group p-2.5 rounded-xl border transition-all flex items-center justify-between shadow-sm cursor-pointer ${
                   isApplied
                     ? 'border-emerald-500/60 bg-emerald-500/10'
@@ -219,7 +233,7 @@ export const PresetsTab: React.FC<PresetsTabProps> = ({ presets }) => {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleApply(preset.name);
+                      handleApply(preset);
                     }}
                     className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
                       isApplied
@@ -240,12 +254,19 @@ export const PresetsTab: React.FC<PresetsTabProps> = ({ presets }) => {
                     )}
                   </button>
 
-                  {preset.category === 'User' && (
+                  {!preset.is_builtin && (
                     <button
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.stopPropagation();
                         if (confirm(`Delete preset "${preset.name}"?`)) {
-                          bridge.deletePreset(preset.id);
+                          try {
+                            await onDeletePreset(preset.id);
+                          } catch (error) {
+                            console.error('[KuroLight] Could not delete editing preset:', error);
+                            toast.error('Could not delete preset', {
+                              description: error instanceof Error ? error.message : 'Browser preset storage failed.',
+                            });
+                          }
                         }
                       }}
                       title="Delete Preset"

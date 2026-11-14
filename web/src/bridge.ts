@@ -4,11 +4,11 @@ import {
   EditState,
   ExportPreset,
   ImageAsset,
-  Preset,
   ColorScopes,
   SmartCollectionRules,
   WorkspaceId,
 } from './types';
+import { cacheLocalEditState } from './utils/storage/imageIndexedDb';
 import type {
   PythonApi,
   BridgeEvents,
@@ -67,7 +67,6 @@ class PythonBridge {
     trash_count_updated: new Set(),
     library_loading: new Set(),
     collections_updated: new Set(),
-    presets_updated: new Set(),
     history_updated: new Set(),
     asset_selected: new Set(),
     filmstrip_toggled: new Set(),
@@ -114,7 +113,6 @@ class PythonBridge {
       'trash_count_updated',
       'library_loading',
       'collections_updated',
-      'presets_updated',
       'history_updated',
       'asset_selected',
       'filmstrip_toggled',
@@ -158,9 +156,6 @@ class PythonBridge {
               break;
             case 'collections_updated':
               this.emit(event, JSON.parse(args[0] as string) as Collection[]);
-              break;
-            case 'presets_updated':
-              this.emit(event, JSON.parse(args[0] as string) as Preset[]);
               break;
             case 'asset_selected':
               this.emit(
@@ -243,16 +238,16 @@ class PythonBridge {
     }
   }
 
-  public updateEditState(state: EditState) {
-    if (this.bridge?.update_edit_state) {
-      this.bridge.update_edit_state(JSON.stringify(state));
+  public async saveEditState(state: EditState): Promise<void> {
+    if (!state.asset_id) throw new Error('Cannot save edits without an active photo');
+    if (this.bridge) {
+      const saveEditState = this.bridge.save_edit_state;
+      if (typeof saveEditState !== 'function') {
+        throw new Error('The Python edit-saving API is unavailable');
+      }
+      await saveEditState(JSON.stringify(state));
     }
-  }
-
-  public saveEditState(state: EditState) {
-    if (this.bridge?.save_edit_state) {
-      this.bridge.save_edit_state(JSON.stringify(state));
-    }
+    await cacheLocalEditState(state.asset_id, state);
   }
 
   public importFiles() {
@@ -447,12 +442,6 @@ class PythonBridge {
         this.thumbnailTimer = null;
         void this.flushThumbnailRequests();
       }, 0);
-    }
-  }
-
-  public autoTone() {
-    if (this.bridge?.auto_tone) {
-      this.bridge.auto_tone();
     }
   }
 
@@ -713,70 +702,9 @@ class PythonBridge {
     }
   }
 
-  // ── Crop Tool Methods ────────────────────────────────────────────────
-  public setCropMode(active: boolean) {
-    if (this.bridge?.set_crop_mode) {
-      this.bridge.set_crop_mode(active);
-    }
-  }
-
-  public applyCrop(x: number, y: number, w: number, h: number) {
-    if (this.bridge?.apply_crop) {
-      this.bridge.apply_crop(x, y, w, h);
-    }
-  }
-
-  public resetCrop() {
-    if (this.bridge?.reset_crop) {
-      this.bridge.reset_crop();
-    }
-  }
-
-  public cancelCrop() {
-    if (this.bridge?.cancel_crop) {
-      this.bridge.cancel_crop();
-    }
-  }
-
   public removeFromCollection(collectionId: string, assetIds: string[]) {
     if (this.bridge?.remove_from_collection) {
       this.bridge.remove_from_collection(collectionId, JSON.stringify(assetIds));
-    }
-  }
-
-  public saveSnapshot(name: string) {
-    if (this.bridge?.save_snapshot) {
-      this.bridge.save_snapshot(name);
-    }
-  }
-
-  public restoreSnapshot(name: string) {
-    if (this.bridge?.restore_snapshot) {
-      this.bridge.restore_snapshot(name);
-    }
-  }
-
-  public deleteSnapshot(name: string) {
-    if (this.bridge?.delete_snapshot) {
-      this.bridge.delete_snapshot(name);
-    }
-  }
-
-  public applyPreset(nameOrId: string) {
-    if (this.bridge?.apply_preset) {
-      this.bridge.apply_preset(nameOrId);
-    }
-  }
-
-  public savePreset(name: string, category: string) {
-    if (this.bridge?.save_preset) {
-      this.bridge.save_preset(name, category);
-    }
-  }
-
-  public deletePreset(presetId: string) {
-    if (this.bridge?.delete_preset) {
-      this.bridge.delete_preset(presetId);
     }
   }
 

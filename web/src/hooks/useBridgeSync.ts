@@ -1,19 +1,22 @@
 import { useEffect, useRef } from 'react';
 import { useAppStore } from '../stores/useAppStore';
 import { bridge } from '../bridge';
-import { ImageAsset, EditState, Collection, Preset, WorkspaceId } from '../types';
+import { ImageAsset, EditState, Collection, WorkspaceId } from '../types';
 import { applyAccentColor } from '../utils/theme';
+import { BUILTIN_EDIT_PRESETS, loadEditingPresets } from '../utils/editingPresets';
+import { cacheLocalEditState, getCachedLocalEditState } from '../utils/storage/imageIndexedDb';
 
 export function useBridgeSync(): void {
   const activeAssetRef = useRef<ImageAsset | null>(null);
+  const hydratedAssetIdRef = useRef<string | null>(null);
+  const assetLoadTokenRef = useRef(0);
+  const latestEditStateRef = useRef(useAppStore.getState().editState);
   const progressHideTimer = useRef<number | null>(null);
   const processingProgressRef = useRef<{ percent: number; message: string } | null>(null);
 
   const {
     setImageUrl,
     setBeforeImageUrl,
-    setHistogram,
-    setColorScopes,
     setAssets,
     setAssetCount,
     setTrashCount,
@@ -39,8 +42,6 @@ export function useBridgeSync(): void {
     const unbind = [
       bridge.on('image_updated', (url: string) => setImageUrl(url)),
       bridge.on('before_image_updated', (url: string) => setBeforeImageUrl(url)),
-      bridge.on('histogram_updated', (hist) => setHistogram(hist)),
-      bridge.on('color_scopes_updated', (scopes) => setColorScopes(scopes)),
       bridge.on('assets_updated', (newAssets: ImageAsset[]) => {
         setAssets(newAssets);
         if (newAssets.length > 0 && !activeAssetRef.current) {
@@ -87,28 +88,69 @@ export function useBridgeSync(): void {
             : null
         );
       }),
-      bridge.on('presets_updated', (newPresets: Preset[]) => setPresets(newPresets)),
       bridge.on('history_updated', (hist: string[], idx: number) => {
         setHistoryList(hist);
         setActiveHistoryIndex(idx);
       }),
       bridge.on('asset_selected', (asset: ImageAsset | null, state: EditState | null) => {
         if (!asset || !state) {
+          assetLoadTokenRef.current += 1;
           activeAssetRef.current = null;
+          hydratedAssetIdRef.current = null;
           resetActiveAssetAndEdits();
+          return;
+        }
+        if (asset.id === activeAssetRef.current?.id && hydratedAssetIdRef.current === asset.id) {
+          setActiveAsset(asset);
           return;
         }
         if (asset.id !== activeAssetRef.current?.id) {
           setImageUrl('');
           setBeforeImageUrl('');
         }
+        const loadToken = ++assetLoadTokenRef.current;
         activeAssetRef.current = asset;
+        hydratedAssetIdRef.current = null;
         setActiveAsset(asset);
-        if (state) {
-          setEditState(state);
-          setSelectedMaskId(state.masks?.[0]?.id ?? null);
-          setSelectedRetouchSpotId(state.retouch_spots?.[0]?.id ?? null);
-        }
+        const selectedState =
+          state.asset_id === asset.id ? state : { ...state, asset_id: asset.id };
+        setEditState(selectedState);
+        setSelectedMaskId(selectedState.masks?.[0]?.id ?? null);
+        setSelectedRetouchSpotId(selectedState.retouch_spots?.[0]?.id ?? null);
+        const hydrationBaseline = useAppStore.getState().editState;
+        void getCachedLocalEditState(asset.id).then((localState) => {
+          if (
+            loadToken !== assetLoadTokenRef.current ||
+            activeAssetRef.current?.id !== asset.id
+          ) {
+            return;
+          }
+          const currentState = useAppStore.getState().editState;
+          if (currentState.asset_id === asset.id && currentState !== hydrationBaseline) {
+            const currentMaskId = useAppStore.getState().selectedMaskId;
+            const currentRetouchSpotId = useAppStore.getState().selectedRetouchSpotId;
+            setSelectedMaskId(
+              currentState.masks?.some((mask) => mask.id === currentMaskId)
+                ? currentMaskId
+                : currentState.masks?.[0]?.id ?? null
+            );
+            setSelectedRetouchSpotId(
+              currentState.retouch_spots?.some(
+                (spot) => spot.id === currentRetouchSpotId
+              )
+                ? currentRetouchSpotId
+                : currentState.retouch_spots?.[0]?.id ?? null
+            );
+            hydratedAssetIdRef.current = asset.id;
+            return;
+          }
+          const nextState =
+            localState?.asset_id === asset.id ? localState : selectedState;
+          setEditState(nextState);
+          setSelectedMaskId(nextState.masks?.[0]?.id ?? null);
+          setSelectedRetouchSpotId(nextState.retouch_spots?.[0]?.id ?? null);
+          hydratedAssetIdRef.current = asset.id;
+        });
       }),
       bridge.on('filmstrip_toggled', (vis: boolean) => setIsFilmstripVisible(vis)),
       bridge.on('workspace_changed', (ws: WorkspaceId) => setWorkspace(ws)),
@@ -121,8 +163,6 @@ export function useBridgeSync(): void {
   }, [
     setImageUrl,
     setBeforeImageUrl,
-    setHistogram,
-    setColorScopes,
     setAssets,
     setAssetCount,
     setTrashCount,
@@ -131,7 +171,6 @@ export function useBridgeSync(): void {
     setProcessingProgress,
     setCollections,
     setActiveCollectionId,
-    setPresets,
     setHistoryList,
     setActiveHistoryIndex,
     setActiveAsset,
@@ -142,6 +181,60 @@ export function useBridgeSync(): void {
     setWorkspace,
     resetActiveAssetAndEdits,
   ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadEditingPresets()
+      .then((loadedPresets) => {
+        if (!cancelled) setPresets(loadedPresets);
+      })
+      .catch((error: unknown) => {
+        console.error('[KuroLight] Could not load browser editing presets:', error);
+        if (!cancelled) {
+          setPresets(BUILTIN_EDIT_PRESETS);
+          setNotice({
+            title: 'User presets unavailable',
+            message: 'Built-in presets are available, but saved user presets could not be loaded.',
+            level: 'error',
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [setNotice, setPresets]);
+
+  const activeAsset = useAppStore((state) => state.activeAsset);
+  const editState = useAppStore((state) => state.editState);
+  useEffect(() => {
+    latestEditStateRef.current = editState;
+  }, [editState]);
+
+  useEffect(() => {
+    const assetId = activeAsset?.id;
+    return () => {
+      const stateToSave = latestEditStateRef.current;
+      if (assetId && stateToSave.asset_id === assetId) {
+        void cacheLocalEditState(assetId, stateToSave);
+      }
+    };
+  }, [activeAsset?.id]);
+
+  useEffect(() => {
+    const assetId = activeAsset?.id;
+    if (
+      !assetId ||
+      hydratedAssetIdRef.current !== assetId ||
+      editState.asset_id !== assetId
+    ) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void cacheLocalEditState(assetId, editState);
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [activeAsset?.id, editState]);
 
   // Load preferences and apply accent color / startup workspace
   useEffect(() => {

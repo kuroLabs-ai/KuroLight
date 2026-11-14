@@ -106,7 +106,6 @@ def run() -> int:
                 library_service=services["library_service"],
                 editing_service=services["editing_service"],
                 command_dispatcher=services["command_dispatcher"],
-                preset_service=services["preset_service"],
                 export_service=services["export_service"],
                 dev_url=dev_url,
             )

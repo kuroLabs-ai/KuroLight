@@ -1,30 +1,71 @@
 import React, { useState } from 'react';
-import { bridge } from '../../bridge';
+import { toast } from 'sonner';
 import { History, Camera, Plus, RotateCcw, Trash2, Check, Clock } from 'lucide-react';
+import type { EditSnapshot, EditState } from '../../types';
 
 interface HistoryTabProps {
-  historyList: string[];
-  activeHistoryIndex: number;
-  snapshots?: Record<string, unknown>;
+  editUndoStack: EditState[];
+  editRedoStack: EditState[];
+  currentEditState: EditState;
+  onJumpEditHistory: (index: number) => void;
+  onChange: (editState: EditState) => void;
+  onSnapshotChange: (editState: EditState) => void;
+  snapshots?: Record<string, EditSnapshot>;
 }
 
 export const HistoryTab: React.FC<HistoryTabProps> = ({
-  historyList,
-  activeHistoryIndex,
+  editUndoStack,
+  editRedoStack,
+  currentEditState,
+  onJumpEditHistory,
+  onChange,
+  onSnapshotChange,
   snapshots = {},
 }) => {
   const [isCreatingSnapshot, setIsCreatingSnapshot] = useState(false);
   const [snapshotName, setSnapshotName] = useState('');
 
   const snapshotEntries = Object.keys(snapshots);
+  const timeline = [
+    ...editUndoStack,
+    currentEditState,
+    ...editRedoStack.slice().reverse(),
+  ];
+  const activeHistoryIndex = editUndoStack.length;
 
   const handleCreateSnapshot = (e: React.FormEvent) => {
     e.preventDefault();
-    if (snapshotName.trim()) {
-      bridge.saveSnapshot(snapshotName.trim());
-      setSnapshotName('');
-      setIsCreatingSnapshot(false);
+    const name = snapshotName.trim();
+    if (!name) return;
+    const snapshot = structuredClone(currentEditState);
+    delete snapshot.snapshots;
+    onSnapshotChange({
+      ...currentEditState,
+      snapshots: { ...currentEditState.snapshots, [name]: snapshot },
+    });
+    setSnapshotName('');
+    setIsCreatingSnapshot(false);
+  };
+
+  const restoreSnapshot = (name: string) => {
+    const snapshot = snapshots[name];
+    if (!snapshot) {
+      toast.error('Snapshot is unavailable', { description: `Could not find "${name}".` });
+      return;
     }
+    onChange({
+      ...currentEditState,
+      ...structuredClone(snapshot),
+      asset_id: currentEditState.asset_id,
+      snapshots: currentEditState.snapshots,
+    });
+  };
+
+  const deleteSnapshot = (name: string) => {
+    const nextSnapshots = { ...currentEditState.snapshots };
+    if (!(name in nextSnapshots)) return;
+    delete nextSnapshots[name];
+    onSnapshotChange({ ...currentEditState, snapshots: nextSnapshots });
   };
 
   return (
@@ -34,34 +75,20 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5 font-bold text-[10px] text-obsidian-textSec uppercase tracking-wider">
             <History size={13} className="text-obsidian-accent" />
-            <span>History Timeline ({historyList.length})</span>
+            <span>History Timeline ({timeline.length - 1})</span>
           </div>
         </div>
 
         {/* Timeline Items List */}
         <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
-          {/* Base Import Step */}
-          <div
-            onClick={() => bridge.jumpHistory(-1)}
-            className={`flex items-center gap-2 p-1.5 rounded cursor-pointer transition-colors ${
-              activeHistoryIndex === -1
-                ? 'bg-obsidian-active text-white font-semibold border border-obsidian-accent'
-                : 'text-obsidian-textMut hover:bg-obsidian-elevated hover:text-white'
-            }`}
-          >
-            <Clock size={12} className={activeHistoryIndex === -1 ? 'text-obsidian-accent' : 'opacity-40'} />
-            <span className="truncate text-[11px]">Original (Import State)</span>
-          </div>
-
-          {/* Subsequent steps */}
-          {historyList.map((step, idx) => {
+          {timeline.map((_, idx) => {
             const isCurrent = idx === activeHistoryIndex;
             const isUndone = idx > activeHistoryIndex;
 
             return (
               <div
                 key={idx}
-                onClick={() => bridge.jumpHistory(idx)}
+                onClick={() => onJumpEditHistory(idx)}
                 className={`flex items-center gap-2 p-1.5 rounded cursor-pointer transition-colors ${
                   isCurrent
                     ? 'bg-obsidian-active text-white font-semibold border border-obsidian-accent'
@@ -70,13 +97,28 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
                     : 'text-obsidian-textSec hover:bg-obsidian-elevated hover:text-white'
                 }`}
               >
-                <div
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    isCurrent ? 'bg-obsidian-accent' : isUndone ? 'bg-obsidian-border' : 'bg-obsidian-textMut'
-                  }`}
-                />
-                <span className="truncate text-[11px]">{step}</span>
-                <span className="ml-auto font-mono text-[9px] text-obsidian-textMut">#{idx + 1}</span>
+                {idx === 0 ? (
+                  <Clock
+                    size={12}
+                    className={isCurrent ? 'text-obsidian-accent' : 'opacity-40'}
+                  />
+                ) : (
+                  <div
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      isCurrent
+                        ? 'bg-obsidian-accent'
+                        : isUndone
+                          ? 'bg-obsidian-border'
+                          : 'bg-obsidian-textMut'
+                    }`}
+                  />
+                )}
+                <span className="truncate text-[11px]">
+                  {idx === 0 ? 'Starting State' : `Edit ${idx}`}
+                </span>
+                {idx > 0 && (
+                  <span className="ml-auto font-mono text-[9px] text-obsidian-textMut">#{idx}</span>
+                )}
               </div>
             );
           })}
@@ -137,7 +179,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
                 <span className="text-white font-medium truncate text-xs flex-1 mr-2">{name}</span>
                 <div className="flex items-center gap-1">
                   <button
-                    onClick={() => bridge.restoreSnapshot(name)}
+                    onClick={() => restoreSnapshot(name)}
                     className="p-1 text-obsidian-textSec hover:text-obsidian-accent rounded hover:bg-obsidian-elevated"
                     title="Restore Snapshot"
                   >
@@ -146,7 +188,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
                   <button
                     onClick={() => {
                       if (confirm(`Delete snapshot "${name}"?`)) {
-                        bridge.deleteSnapshot(name);
+                        deleteSnapshot(name);
                       }
                     }}
                     className="p-1 text-obsidian-textMut hover:text-red-400 rounded hover:bg-obsidian-elevated opacity-0 group-hover:opacity-100 transition-opacity"

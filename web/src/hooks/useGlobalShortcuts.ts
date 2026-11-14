@@ -7,15 +7,18 @@ import { getShortcutFromEvent, loadShortcuts } from '../settings';
 export interface UseGlobalShortcutsOptions {
   toggleRightPanelCollapse: () => void;
   onWorkspaceChange: (ws: WorkspaceId) => void;
+  onSaveEdits: () => void | Promise<void>;
 }
 
 export function useGlobalShortcuts({
   toggleRightPanelCollapse,
   onWorkspaceChange,
+  onSaveEdits,
 }: UseGlobalShortcutsOptions): void {
   const {
     workspace,
-    editState,
+    undoEditState,
+    redoEditState,
     isSettingsOpen,
     isAIPopupOpen,
     isCropActive,
@@ -29,11 +32,11 @@ export function useGlobalShortcuts({
   // 1. Undo & Redo
   useHotkeys('mod+z', (e) => {
     e.preventDefault();
-    bridge.undo();
+    undoEditState();
   });
   useHotkeys(['mod+shift+z', 'mod+y'], (e) => {
     e.preventDefault();
-    bridge.redo();
+    redoEditState();
   });
 
   // 2. Workspaces
@@ -64,7 +67,6 @@ export function useGlobalShortcuts({
     if (workspace === 'develop') {
       e.preventDefault();
       setIsCropActive(!isCropActive);
-      bridge.setCropMode(!isCropActive);
     }
   });
 
@@ -75,7 +77,7 @@ export function useGlobalShortcuts({
   });
   useHotkeys('mod+s', (e) => {
     e.preventDefault();
-    bridge.saveEditState(editState);
+    void onSaveEdits();
   });
   useHotkeys('mod+i', (e) => {
     e.preventDefault();
@@ -86,7 +88,6 @@ export function useGlobalShortcuts({
     else if (isAIPopupOpen) setIsAIPopupOpen(false);
     else if (isCropActive) {
       setIsCropActive(false);
-      bridge.cancelCrop();
     }
   });
 
