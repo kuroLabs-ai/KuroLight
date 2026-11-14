@@ -10,6 +10,7 @@ interface FilmstripProps {
   activeAsset?: ImageAsset | null;
   activeCollectionId?: string | null;
   collectionAssetCount?: number;
+  selectedAssets?: ImageAsset[] | null;
   activeAssetId?: string;
   onSelectAsset: (id: string) => void;
   isVisible: boolean;
@@ -23,6 +24,7 @@ export const Filmstrip: React.FC<FilmstripProps> = ({
   activeAsset,
   activeCollectionId,
   collectionAssetCount,
+  selectedAssets,
   activeAssetId,
   onSelectAsset,
   isVisible,
@@ -38,7 +40,7 @@ export const Filmstrip: React.FC<FilmstripProps> = ({
   const [retryKey, setRetryKey] = useState(0);
   const footerRef = useRef<HTMLElement>(null);
   const nextOffsetRef = useRef(0);
-  const visibleAssets = bridge.hasNativeApi ? filmstripAssets : assets;
+  const visibleAssets = selectedAssets ?? (bridge.hasNativeApi ? filmstripAssets : assets);
 
   useEffect(() => {
     if (!bridge.hasNativeApi) return;

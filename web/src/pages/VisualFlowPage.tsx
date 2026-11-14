@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { toast } from 'sonner';
 import {
   Share2,
   Image as ImageIcon,
@@ -19,9 +20,9 @@ import {
   Circle,
   Search,
 } from 'lucide-react';
-import { bridge } from '../bridge';
 import { ColorPickerInput } from '../components/common/ColorPickerInput';
 import { GalleryThumbnail } from '../components/gallery/GalleryThumbnail';
+import { CurveEditorCard } from '../components/color_studio/CurveEditorCard';
 import type {
   VisualFlowPageProps,
   FlowNode,
@@ -29,8 +30,9 @@ import type {
   VignetteSettings,
   BackgroundRemovalSettings,
 } from '../interfaces';
-import type { FlowEffectCategory } from '../types';
+import type { EditState, FlowEffectCategory } from '../types';
 import { FLOW_NODE_OPTIONS, FLOW_PROCESS_ORDER } from '../constants';
+import { VisualFlowPreview } from './VisualFlowPreview';
 
 export type {
   VisualFlowPageProps,
@@ -52,9 +54,16 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
   activeAsset,
   editState,
   onChange,
-  historyList,
-  activeHistoryIndex,
+  editUndoStack,
+  editRedoStack,
+  hasPendingEditHistory,
+  onUndo,
+  onRedo,
+  onJumpEditHistory,
+  histogram,
   presets,
+  onApplyPreset,
+  onSavePreset,
 }) => {
   // ── Canvas Navigation State ──
   const [pan, setPan] = useState({ x: 80, y: 100 });
@@ -64,10 +73,6 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
   const [selectedNodeId, setSelectedNodeId] = useState<string>('tone');
   const [newNodeCategory, setNewNodeCategory] = useState<FlowEffectCategory | ''>('');
   const [selectedHslBand, setSelectedHslBand] = useState('red');
-  const [selectedCurveChannel, setSelectedCurveChannel] = useState<
-    'rgb_points' | 'red_points' | 'green_points' | 'blue_points'
-  >('rgb_points');
-  const [draggingCurvePoint, setDraggingCurvePoint] = useState<number | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState('');
   const [layouts, setLayouts] = useState<FlowLayout[]>(() => {
     try {
@@ -88,6 +93,14 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
   const [nodeSearch, setNodeSearch] = useState('');
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const historyTimeline = useMemo(
+    () => [...editUndoStack, editState, ...editRedoStack.slice().reverse()],
+    [editRedoStack, editState, editUndoStack]
+  );
+  const activeHistoryIndex = editUndoStack.length;
+  const canUndo = editUndoStack.length > 0 || hasPendingEditHistory;
+  const canRedo = editRedoStack.length > 0;
+  const flowPreviewSource = beforeImageUrl || imageUrl;
   const flowNodeSettings = editState.custom_metadata?.flow_nodes;
   const vignette = readSettings<VignetteSettings>(
     editState.custom_metadata?.vignette,
@@ -275,14 +288,16 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
     [nodes, flowNodeEnabled]
   );
 
+  const withNodeEnabled = (state: EditState, nodeId: string, enabled: boolean): EditState => ({
+    ...state,
+    custom_metadata: {
+      ...(state.custom_metadata ?? {}),
+      flow_nodes: { ...flowNodeEnabled, [nodeId]: enabled },
+    },
+  });
+
   const saveNodeEnabled = (nodeId: string, enabled: boolean) => {
-    onChange({
-      ...editState,
-      custom_metadata: {
-        ...(editState.custom_metadata ?? {}),
-        flow_nodes: { ...flowNodeEnabled, [nodeId]: enabled },
-      },
-    });
+    onChange(withNodeEnabled(editState, nodeId, enabled));
   };
 
   const addNode = () => {
@@ -321,10 +336,11 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
 
   const resetNode = (node: FlowNode, e: React.MouseEvent) => {
     e.stopPropagation();
+    const resetState = withNodeEnabled(editState, node.id, true);
     switch (node.category) {
       case 'tone':
         onChange({
-          ...editState,
+          ...resetState,
           exposure: {
             exposure: 0,
             contrast: 0,
@@ -337,41 +353,39 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
         break;
       case 'color':
         onChange({
-          ...editState,
+          ...resetState,
           white_balance: { temperature: 0, tint: 0, saturation: 0, vibrance: 0 },
         });
         break;
       case 'detail':
         onChange({
-          ...editState,
+          ...resetState,
           detail: { ...editState.detail, sharpening: 0, noise_reduction: 0, clarity: 0, texture: 0 },
         });
         break;
       case 'dehaze':
-        onChange({ ...editState, detail: { ...editState.detail, dehaze: 0 } });
+        onChange({ ...resetState, detail: { ...editState.detail, dehaze: 0 } });
         break;
       case 'hsl':
-        if (editState.hsl) {
-          onChange({
-            ...editState,
-            hsl: {
-              red: { hue: 0, saturation: 0, luminance: 0 },
-              orange: { hue: 0, saturation: 0, luminance: 0 },
-              yellow: { hue: 0, saturation: 0, luminance: 0 },
-              green: { hue: 0, saturation: 0, luminance: 0 },
-              aqua: { hue: 0, saturation: 0, luminance: 0 },
-              blue: { hue: 0, saturation: 0, luminance: 0 },
-              purple: { hue: 0, saturation: 0, luminance: 0 },
-              magenta: { hue: 0, saturation: 0, luminance: 0 },
-            },
-          });
-        }
+        onChange({
+          ...resetState,
+          hsl: {
+            red: { hue: 0, saturation: 0, luminance: 0 },
+            orange: { hue: 0, saturation: 0, luminance: 0 },
+            yellow: { hue: 0, saturation: 0, luminance: 0 },
+            green: { hue: 0, saturation: 0, luminance: 0 },
+            aqua: { hue: 0, saturation: 0, luminance: 0 },
+            blue: { hue: 0, saturation: 0, luminance: 0 },
+            purple: { hue: 0, saturation: 0, luminance: 0 },
+            magenta: { hue: 0, saturation: 0, luminance: 0 },
+          },
+        });
         break;
       case 'grading':
-        if (editState.color_grading) {
+        {
           const neutral = { hue: 0, saturation: 0, luminance: 0 };
           onChange({
-            ...editState,
+            ...resetState,
             color_grading: {
               lift: neutral,
               gamma: neutral,
@@ -384,10 +398,10 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
         }
         break;
       case 'curves':
-        if (editState.tone_curves) {
+        {
           const identity = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
           onChange({
-            ...editState,
+            ...resetState,
             tone_curves: {
               rgb_points: identity,
               red_points: identity,
@@ -399,10 +413,11 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
         break;
       case 'geometry':
         onChange({
-          ...editState,
+          ...resetState,
           geometry: {
             ...editState.geometry,
             rotation: 0,
+            straighten: 0,
             aspect_ratio: 'Original',
             horizontal_flip: false,
             vertical_flip: false,
@@ -415,24 +430,23 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
         break;
       case 'vignette':
         onChange({
-          ...editState,
+          ...resetState,
           custom_metadata: {
-            ...(editState.custom_metadata ?? {}),
+            ...(resetState.custom_metadata ?? {}),
             vignette: { enabled: false, amount: 0, midpoint: 0.5, feather: 0.5 },
           },
         });
         break;
       case 'background_removal':
         onChange({
-          ...editState,
+          ...resetState,
           custom_metadata: {
-            ...(editState.custom_metadata ?? {}),
+            ...(resetState.custom_metadata ?? {}),
             background_removal: { enabled: false, color: '#00ff00', tolerance: 0.18, feather: 0.08 },
           },
         });
         break;
     }
-    saveNodeEnabled(node.id, true);
   };
 
   const updateVignette = (updates: Partial<VignetteSettings>) => {
@@ -482,7 +496,14 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
 
   const saveCurrentPreset = () => {
     const name = window.prompt('Name this editing preset:');
-    if (name?.trim()) bridge.savePreset(name.trim(), 'User');
+    if (name?.trim()) {
+      void Promise.resolve(onSavePreset(name.trim(), 'User')).catch((error: unknown) => {
+        console.error('[KuroLight] Could not save editing preset:', error);
+        toast.error('Could not save preset', {
+          description: error instanceof Error ? error.message : 'Browser preset storage failed.',
+        });
+      });
+    }
   };
 
   // ── Auto-layout nodes in sequential stream ──
@@ -661,77 +682,6 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
     });
   };
 
-  const updateCurve = (value: number) => {
-    const identity = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
-    const curves = editState.tone_curves ?? {
-      rgb_points: identity,
-      red_points: identity,
-      green_points: identity,
-      blue_points: identity,
-    };
-    const points = curves[selectedCurveChannel].filter((point) => point.x !== 0.5);
-    points.push({ x: 0.5, y: value });
-    points.sort((a, b) => a.x - b.x);
-    onChange({
-      ...editState,
-      tone_curves: { ...curves, [selectedCurveChannel]: points },
-    });
-  };
-
-  const curvePoints = editState.tone_curves?.[selectedCurveChannel] ?? [
-    { x: 0, y: 0 },
-    { x: 1, y: 1 },
-  ];
-  const curveMidpoint = curvePoints.find((point) => point.x === 0.5)?.y ?? 0.5;
-
-  const updateCurvePoint = (index: number, x: number, y: number) => {
-    const identity = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
-    const curves = editState.tone_curves ?? {
-      rgb_points: identity,
-      red_points: identity,
-      green_points: identity,
-      blue_points: identity,
-    };
-    const points = [...curves[selectedCurveChannel]];
-    const currentPoint = points[index];
-    if (!currentPoint) return;
-    const minX = index === 0 ? 0 : points[index - 1].x + 0.01;
-    const maxX = index === points.length - 1 ? 1 : points[index + 1].x - 0.01;
-    points[index] = {
-      x: index === 0 ? 0 : index === points.length - 1 ? 1 : Math.max(minX, Math.min(maxX, x)),
-      y: index === 0 ? 0 : index === points.length - 1 ? 1 : Math.max(0, Math.min(1, y)),
-    };
-    onChange({
-      ...editState,
-      tone_curves: { ...curves, [selectedCurveChannel]: points },
-    });
-  };
-
-  const addCurvePoint = (event: React.MouseEvent<SVGSVGElement>) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const x = Math.max(0.01, Math.min(0.99, (event.clientX - bounds.left) / bounds.width));
-    const y = Math.max(0.01, Math.min(0.99, 1 - (event.clientY - bounds.top) / bounds.height));
-    const points = [...curvePoints, { x, y }].sort((a, b) => a.x - b.x);
-    const curves = editState.tone_curves ?? {
-      rgb_points: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
-      red_points: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
-      green_points: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
-      blue_points: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
-    };
-    onChange({
-      ...editState,
-      tone_curves: { ...curves, [selectedCurveChannel]: points },
-    });
-  };
-
-  const moveCurvePoint = (event: React.PointerEvent<SVGSVGElement>) => {
-    if (draggingCurvePoint === null) return;
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const x = (event.clientX - bounds.left) / bounds.width;
-    const y = 1 - (event.clientY - bounds.top) / bounds.height;
-    updateCurvePoint(draggingCurvePoint, x, y);
-  };
-
   // ── SVG Connection Cables Generator ──
   const connections = useMemo(() => {
     const cables = [];
@@ -797,39 +747,41 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
           </span>
           <div className="flex items-center gap-1 ml-2">
             <button
-              onClick={() => bridge.undo()}
-              disabled={activeHistoryIndex < 0}
+              type="button"
+              onClick={onUndo}
+              disabled={!canUndo}
               className="p-1 rounded hover:bg-obsidian-hover text-obsidian-textSec disabled:opacity-30"
-              title="Undo"
+              title="Undo latest photo adjustment"
+              aria-label="Undo latest photo adjustment"
             >
               <Undo2 size={13} />
             </button>
             <button
-              onClick={() => bridge.redo()}
-              disabled={activeHistoryIndex >= historyList.length - 1}
+              type="button"
+              onClick={onRedo}
+              disabled={!canRedo}
               className="p-1 rounded hover:bg-obsidian-hover text-obsidian-textSec disabled:opacity-30"
-              title="Redo"
+              title="Redo photo adjustment"
+              aria-label="Redo photo adjustment"
             >
               <Redo2 size={13} />
             </button>
             <select
               aria-label="Visual Flow edit history"
               value={activeHistoryIndex}
-              onChange={(event) => bridge.jumpHistory(Number(event.target.value))}
+              onChange={(event) => onJumpEditHistory(Number(event.target.value))}
+              disabled={!activeAsset}
               className="max-w-40 bg-obsidian-card border border-obsidian-border rounded px-1.5 py-1 text-[9px] text-obsidian-textPri"
             >
-              {historyList.length === 0 ? (
-                <option value={-1}>No history</option>
-              ) : (
-                <>
-                  <option value={-1}>Original (Import State)</option>
-                  {historyList.map((entry, index) => (
-                    <option key={`${index}-${entry}`} value={index}>
-                      {index + 1}. {entry}
-                    </option>
-                  ))}
-                </>
-              )}
+              {historyTimeline.map((_, index) => (
+                <option key={index} value={index}>
+                  {index === activeHistoryIndex
+                    ? `Current · Version ${index}`
+                    : index === 0
+                      ? 'Initial state'
+                      : `Version ${index}`}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -869,7 +821,7 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
               ))}
             </select>
             <button
-              onClick={() => selectedPresetId && bridge.applyPreset(selectedPresetId)}
+              onClick={() => selectedPresetId && onApplyPreset(selectedPresetId)}
               disabled={!selectedPresetId}
               className="app-control flex h-8 w-8 items-center justify-center rounded-lg text-obsidian-textPri disabled:opacity-40"
               title="Apply selected preset"
@@ -938,7 +890,7 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
 
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/30 border border-emerald-600/40 text-[9.5px] font-bold text-emerald-400 font-mono">
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span>REALTIME PIPELINE</span>
+            <span>{activeAsset ? 'LIVE WEBGL' : 'NO SOURCE'}</span>
           </div>
         </div>
       </div>
@@ -1021,6 +973,7 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
           {displayedNodes.map((node) => {
             const isSelected = selectedNodeId === node.id;
             const isLive = node.enabled;
+            const sourceMetadata = activeAsset?.metadata;
 
             return (
               <div
@@ -1134,16 +1087,20 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
                           <ImageIcon size={28} className="text-obsidian-textMut/30" />
                         )}
                         <span className="absolute bottom-1 right-1.5 px-1.5 py-0.5 rounded bg-black/70 text-[8.5px] font-mono text-white">
-                          RAW / SOURCE
+                          SOURCE
                         </span>
                       </div>
                       <div className="text-[10px] text-obsidian-textMut font-mono truncate">
-                        {activeAsset?.file_name || 'source_photo.dng'}
+                        {activeAsset?.file_name || 'No photo selected'}
                       </div>
-                      <div className="flex items-center justify-between text-[9px] text-obsidian-textSec font-mono">
-                        <span>ISO {activeAsset?.metadata?.iso || 100}</span>
-                        <span>{activeAsset?.metadata?.shutter_speed_str || '1/250s'}</span>
-                        <span>f/{activeAsset?.metadata?.aperture_f_number || '2.8'}</span>
+                      <div className="truncate text-[9px] text-obsidian-textSec font-mono">
+                        {[
+                          sourceMetadata?.iso ? `ISO ${sourceMetadata.iso}` : '',
+                          sourceMetadata?.shutter_speed_str || '',
+                          sourceMetadata?.aperture_f_number
+                            ? `f/${sourceMetadata.aperture_f_number}`
+                            : '',
+                        ].filter(Boolean).join(' · ') || 'No exposure metadata'}
                       </div>
                     </div>
                   )}
@@ -1401,114 +1358,11 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
 
                   {/* Category: Tone Curves Node */}
                   {node.category === 'curves' && (
-                    <div className="space-y-2">
-                      <select
-                        aria-label="Tone curve channel"
-                        value={selectedCurveChannel}
-                        onChange={(event) =>
-                          setSelectedCurveChannel(
-                            event.target.value as typeof selectedCurveChannel
-                          )
-                        }
-                        className="w-full bg-obsidian-deep border border-obsidian-border rounded px-2 py-1 text-[10px] text-white"
-                      >
-                        <option value="rgb_points">RGB</option>
-                        <option value="red_points">Red</option>
-                        <option value="green_points">Green</option>
-                        <option value="blue_points">Blue</option>
-                      </select>
-                      <div className="w-full h-28 bg-obsidian-deep rounded border border-obsidian-border/50 p-2 flex items-center justify-center relative">
-                        <svg
-                          viewBox="0 0 100 100"
-                          className="w-full h-full touch-none"
-                          onDoubleClick={addCurvePoint}
-                          onPointerMove={moveCurvePoint}
-                          onPointerUp={() => setDraggingCurvePoint(null)}
-                          onPointerLeave={() => setDraggingCurvePoint(null)}
-                        >
-                          <line
-                            x1="0"
-                            y1="100"
-                            x2="100"
-                            y2="0"
-                            stroke="#252A32"
-                            strokeWidth="1"
-                            strokeDasharray="3,3"
-                          />
-                          <polyline
-                            points={curvePoints
-                              .map((point) => `${point.x * 100},${(1 - point.y) * 100}`)
-                              .join(' ')}
-                            fill="none"
-                            stroke={
-                              selectedCurveChannel === 'red_points'
-                                ? '#ef4444'
-                                : selectedCurveChannel === 'green_points'
-                                  ? '#22c55e'
-                                  : selectedCurveChannel === 'blue_points'
-                                    ? '#3b82f6'
-                                    : '#06B6D4'
-                            }
-                            strokeWidth="2"
-                          />
-                          <circle
-                            cx="50"
-                            cy={(1 - curveMidpoint) * 100}
-                            r="3"
-                            fill="white"
-                            stroke="#06B6D4"
-                            strokeWidth="1.5"
-                          />
-                          {curvePoints.map((point, index) => (
-                            <circle
-                              key={`${point.x}-${index}`}
-                              cx={point.x * 100}
-                              cy={(1 - point.y) * 100}
-                              r="2.5"
-                              fill="#111318"
-                              stroke="white"
-                              strokeWidth="1"
-                              className="cursor-move"
-                              onPointerDown={(event) => {
-                                event.stopPropagation();
-                                setDraggingCurvePoint(index);
-                                event.currentTarget.setPointerCapture(event.pointerId);
-                              }}
-                            />
-                          ))}
-                        </svg>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-[9px] text-obsidian-textMut">
-                          <span>{selectedCurveChannel.replace('_points', '')} midpoint</span>
-                          <span className="font-mono text-white">
-                            {Math.round(curveMidpoint * 100)}
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min={0}
-                          max={1}
-                          step={0.01}
-                          value={curveMidpoint}
-                          onChange={(e) => updateCurve(parseFloat(e.target.value))}
-                          className="w-full h-1 rounded appearance-none cursor-pointer accent-cyan-500 bg-obsidian-deep"
-                        />
-                        <input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.01}
-                          aria-label="Tone curve midpoint output"
-                          value={curveMidpoint}
-                          onChange={(e) => updateCurve(Number(e.target.value))}
-                          className="w-full bg-obsidian-deep border border-obsidian-border rounded px-2 py-1 text-[9px] text-white"
-                        />
-                      </div>
-                      <div className="text-[8px] text-obsidian-textMut">
-                        Double-click to add a point; drag points to shape the curve.
-                      </div>
-                    </div>
+                    <CurveEditorCard
+                      curves={editState.tone_curves}
+                      histogram={histogram}
+                      onChange={(tone_curves) => onChange({ ...editState, tone_curves })}
+                    />
                   )}
 
                   {/* Category: Detail Node */}
@@ -1821,21 +1675,18 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
                   {node.category === 'output' && (
                     <div className="space-y-2">
                       <div className="w-full h-28 rounded bg-obsidian-deep overflow-hidden border border-obsidian-border/50 relative flex items-center justify-center">
-                        {imageUrl ? (
-                          <img src={imageUrl} alt="" className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="relative w-full h-full flex items-center justify-center bg-obsidian-surface/60 overflow-hidden">
-                            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.08] to-transparent animate-shimmer" />
-                            <ImageIcon size={28} className="text-obsidian-textMut/30 relative z-10" />
-                          </div>
+                        <VisualFlowPreview imageSrc={flowPreviewSource} editState={editState} />
+                        {flowPreviewSource && (
+                          <span className="absolute bottom-1 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[8.5px] font-mono font-bold text-emerald-400">
+                            LIVE OUTPUT
+                          </span>
                         )}
-                        <span className="absolute bottom-1 right-1.5 px-1.5 py-0.5 rounded bg-black/70 text-[8.5px] font-mono text-emerald-400 font-bold">
-                          PROCESSED
-                        </span>
                       </div>
                       <div className="flex items-center justify-between text-[9.5px] text-obsidian-textSec font-mono">
-                        <span>Format: RGB 16-bit</span>
-                        <span className="text-emerald-400 font-bold">Active</span>
+                        <span>Edits update in real time</span>
+                        <span className={flowPreviewSource ? 'font-bold text-emerald-400' : 'text-obsidian-textMut'}>
+                          {flowPreviewSource ? 'Active' : 'Waiting'}
+                        </span>
                       </div>
                     </div>
                   )}

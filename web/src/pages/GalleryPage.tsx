@@ -32,6 +32,7 @@ import {
   PanelRightOpen,
   Columns,
   Eye,
+  Film,
   Trash2,
 } from 'lucide-react';
 
@@ -45,7 +46,9 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
   collections,
   activeCollectionId,
   onActiveCollectionChange,
+  onGallerySelectionChange,
   onOpenInLightbox,
+  onOpenSelectedInLightbox,
   onSelectedAssetChange,
 }) => {
   // ── Panel Resize States ──
@@ -404,6 +407,32 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
     .map((assetId) => selectedAssetsList.find((asset) => asset.id === assetId))
     .filter((asset): asset is ImageAsset => asset !== undefined);
 
+  const publishSelection = useCallback(
+    (assetIds: Set<string>, activeAssetId: string | null) => {
+      const ids = Array.from(assetIds);
+      const availableAssets = new Map(
+        [
+          ...assets,
+          ...(usesNativePages ? pagedAssets ?? [] : []),
+          ...(activeAsset ? [activeAsset] : []),
+        ].map((asset) => [asset.id, asset] as const),
+      );
+      const selectedAssets = ids
+        .map((assetId) => availableAssets.get(assetId))
+        .filter((asset): asset is ImageAsset => asset !== undefined);
+      onSelectedAssetChange?.(activeAssetId);
+      onGallerySelectionChange?.(ids, selectedAssets);
+    },
+    [
+      activeAsset,
+      assets,
+      onGallerySelectionChange,
+      onSelectedAssetChange,
+      pagedAssets,
+      usesNativePages,
+    ],
+  );
+
   // ── Selection Handlers ──
   const handleSelectAsset = (asset: ImageAsset, isMulti: boolean, isRange: boolean) => {
     if (isRange && lastSelectedId) {
@@ -418,7 +447,7 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
         }
         setSelectedAssetIds(rangeIds);
         setLastSelectedId(asset.id);
-        onSelectedAssetChange?.(asset.id);
+        publishSelection(rangeIds, asset.id);
         return;
       }
     }
@@ -432,13 +461,22 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
       }
       setSelectedAssetIds(next);
       setLastSelectedId(asset.id);
-      onSelectedAssetChange?.(next.size > 0 ? asset.id : null);
+      publishSelection(next, next.size > 0 ? asset.id : null);
     } else {
-      setSelectedAssetIds(new Set([asset.id]));
+      const next = new Set([asset.id]);
+      setSelectedAssetIds(next);
       setLastSelectedId(asset.id);
-      onSelectedAssetChange?.(asset.id);
+      publishSelection(next, asset.id);
     }
   };
+
+  const handleMultiSelect = useCallback((assetIds: Set<string>) => {
+    setSelectedAssetIds(assetIds);
+    const activeId = lastSelectedId && assetIds.has(lastSelectedId)
+      ? lastSelectedId
+      : assetIds.values().next().value ?? null;
+    publishSelection(assetIds, activeId);
+  }, [lastSelectedId, publishSelection]);
 
   const handleSelectAll = useCallback(() => {
     if (assetIdsError) {
@@ -447,16 +485,14 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
     }
     const all = new Set(allFilteredAssetIds);
     setSelectedAssetIds(all);
-    if (allFilteredAssetIds.length > 0) {
-      onSelectedAssetChange?.(allFilteredAssetIds[0]);
-    }
-  }, [allFilteredAssetIds, assetIdsError, onSelectedAssetChange]);
+    publishSelection(all, allFilteredAssetIds[0] ?? null);
+  }, [allFilteredAssetIds, assetIdsError, publishSelection]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedAssetIds(new Set());
     setLastSelectedId(null);
-    onSelectedAssetChange?.(null);
-  }, [onSelectedAssetChange]);
+    publishSelection(new Set(), null);
+  }, [publishSelection]);
 
   const handleRemoveComparisonAsset = (assetId: string) => {
     const next = comparisonAssetIds.filter((id) => id !== assetId);
@@ -525,6 +561,24 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
     if (!isTrashView) onOpenInLightbox(assetId);
   }, [isTrashView, onOpenInLightbox]);
 
+  const handleOpenSelectedInLightbox = useCallback(() => {
+    if (isTrashView || selectedAssetIds.size === 0 || !onOpenSelectedInLightbox) return;
+
+    const assetOrder = new Map(allFilteredAssetIds.map((id, index) => [id, index]));
+    const selectedIds = Array.from(selectedAssetIds).sort(
+      (left, right) =>
+        (assetOrder.get(left) ?? Number.MAX_SAFE_INTEGER) -
+        (assetOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
+    );
+    onOpenSelectedInLightbox(selectedIds, selectedAssetsList);
+  }, [
+    allFilteredAssetIds,
+    isTrashView,
+    onOpenSelectedInLightbox,
+    selectedAssetIds,
+    selectedAssetsList,
+  ]);
+
   const handleAddToCollection = (collectionId: string) => {
     const ids = Array.from(selectedAssetIds);
     if (ids.length > 0) {
@@ -536,9 +590,10 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
   const handleContextMenu = (e: React.MouseEvent, asset: ImageAsset) => {
     e.preventDefault();
     if (!selectedAssetIds.has(asset.id)) {
-      setSelectedAssetIds(new Set([asset.id]));
+      const next = new Set([asset.id]);
+      setSelectedAssetIds(next);
       setLastSelectedId(asset.id);
-      onSelectedAssetChange?.(asset.id);
+      publishSelection(next, asset.id);
     }
     setContextMenu({
       x: e.clientX,
@@ -691,6 +746,18 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
               >
                 <X size={11} />
                 <span>Clear ({selectedAssetIds.size})</span>
+              </button>
+            )}
+            {!isTrashView && selectedAssetIds.size > 0 && (
+              <button
+                type="button"
+                onClick={handleOpenSelectedInLightbox}
+                disabled={!onOpenSelectedInLightbox || selectedAssetsList.length === 0}
+                className="flex items-center gap-1 rounded border border-obsidian-accent/50 bg-obsidian-accent/15 px-2 py-1 text-[11px] font-medium text-white hover:bg-obsidian-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Open the selected photos and show them together in the filmstrip"
+              >
+                <Film size={12} />
+                <span>Open in Filmstrip ({selectedAssetIds.size})</span>
               </button>
             )}
             {!isTrashView && selectedAssetIds.size === 2 &&
@@ -847,7 +914,7 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
               assets={galleryAssets}
               selectedAssetIds={selectedAssetIds}
               onSelectAsset={handleSelectAsset}
-              onMultiSelect={setSelectedAssetIds}
+              onMultiSelect={handleMultiSelect}
               onClearSelection={handleClearSelection}
               onOpenInLightbox={handleOpenInLightbox}
               onContextMenu={handleContextMenu}
