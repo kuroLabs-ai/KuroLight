@@ -4,8 +4,8 @@
 
 ### Intelligent Visual Creation & Non-Destructive Photographic Studio
 
-A modern, high-performance desktop photo library and raw development workstation.<br/>
-Original master files remain pristine while adjustments are rendered in real time through an accelerated 32-bit floating-point processing graph.
+A modern desktop photo library and raw development workstation.<br/>
+Original master files remain pristine while the browser renders interactive edits with WebGL and Python handles catalog persistence and full-resolution processing.
 
 [![Version](https://img.shields.io/badge/version-1.0.0-25C7FF?style=for-the-badge&logo=semver&logoColor=white)](pyproject.toml)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](pyproject.toml)
@@ -33,9 +33,9 @@ Original master files remain pristine while adjustments are rendered in real tim
 
 ## 📸 Overview
 
-**KuroLight** is a desktop photo management and editing environment engineered from first principles around one sacred rule: **your source photographs are never modified**.
+**KuroLight** is a desktop photo management and editing environment built around one rule: **your source photographs are never modified**.
 
-Every edit—from basic exposure and white balance to complex 3-way color grading wheels, parametric tone curves, 3D LUT evaluation, local brush masks, spot healing, and neural super-resolution—is recorded as an immutable, versioned adjustment state. Adjustments are dynamically applied through a 32-bit floating-point Python computational DAG graph, visualized through an ultra-responsive React 19 interface, and materialized only when exported via the background batch delivery queue.
+Interactive edits—from exposure and white balance to color wheels, tone curves, LUTs, masks, and retouching—are rendered by the browser's WebGL engine. The browser caches edit state locally; in the native app, Save/Ctrl+S also persists it to the Python catalog. Python's image-processing pipeline remains responsible for full-resolution exports, so some WebGL preview operations are approximations rather than pixel-identical replicas of Python processing.
 
 ---
 
@@ -64,7 +64,7 @@ Every edit—from basic exposure and white balance to complex 3-way color gradin
 └───────────────────────┴─────────────────────────────┴───────────────────────┘
 ```
 
-- **Zero Data Loss Guarantee**: All edits, snapshots, ratings, flags, and undo histories survive app restarts and are preserved even in Recently Deleted trash.
+- **Non-Destructive Edit State**: Source photographs are not overwritten. Browser edit state is cached locally; saved edits are persisted in the native catalog. Undo/redo stacks are session-local, while named snapshots are included in saved edit state.
 - **Privacy-First Design**: Photos stay local on your machine. Cloud AI connections are strictly opt-in and gated by explicit disclosure; credentials live solely in your operating system's secure keychain.
 - **Ultra-Fast Zero-Lag Workflow**: Photo selection is decoupled from heavy rendering pipelines; selecting a photo in the library updates metadata instantly, while the Lightbox utilizes instant thumbnail pre-caching for 0ms transitions.
 - **Cross-Platform Ready**: Architected with strict path normalization, directory traversal defense, native Windows file dialog integration, and hardware execution provider abstraction.
@@ -105,6 +105,7 @@ KuroLight provides five dedicated, task-focused workspaces accessible via the to
 - **Decoupled Fast Selection**: Single-clicking photos selects them instantly for EXIF inspection without blocking the engine; double-clicking or switching tabs seamlessly loads full development.
 - **Folder & Album Navigation**: Filter catalog by filesystem directory representation or custom nested collections with shimmering folder placeholders.
 - **Smart Collections**: Dynamically aggregate assets matching text search queries, star ratings (0–5), pick/reject flags, and source folders.
+- **Multi-Photo Lightbox**: Select multiple photos and open them together in the Lightbox filmstrip, then switch between them while editing.
 - **Compare & Survey**: Inspect 2 loaded images side-by-side or survey 2–4 candidates simultaneously with shared zoom and per-photo culling hotkeys.
 - **Metadata Inspector**: View EXIF capture data (camera, lens, shutter, aperture, ISO, exposure compensation) with centered aspect-fit preview and metadata editor.
 - **Indefinite Recoverable Trash**: Soft-delete catalog records without touching original files on disk; restore anytime or confirm permanent removal.
@@ -117,20 +118,22 @@ KuroLight provides five dedicated, task-focused workspaces accessible via the to
 - **Detail & Texture**: Unsharp masking, bilateral noise reduction, texture, high-pass clarity, and atmospheric dehaze.
 - **Optics & Geometry**: Manual lens radial distortion correction, optical vignetting, transverse chromatic aberration, straighten, crop aspect constraints, and flips.
 - **Local Adjustment Masks**: Paintable brush masks, linear gradients, radial gradients, luminance ranges, and color ranges combined via replace, add, subtract, or intersect operations.
+  Color and luminance ranges can be seeded by sampling a pixel from the rendered image; Escape cancels sampling.
 - **Spot Retouching**: Non-destructive healing and cloning with draggable source/target pins on canvas.
 - **Presets & History**: Searchable 54 built-in presets, custom recipes, snapshot checkpoints, and per-asset undo/redo timeline scrubbing.
 
 ### 3. 🌈 Color Studio (`Alt+3`)
 *Precision color grading and broadcast-grade scopes.*
-- **3-Way Color Wheels**: Independent Lift (shadows), Gamma (midtones), Gain (highlights), and Offset controls with hue wheels and luminance sliders.
+- **3-Way Color Wheels**: Circular Lift (shadows), Gamma (midtones), Gain (highlights), and Offset controls with hue, saturation, and luminance adjustments.
 - **Parametric Curves**: Master RGB curve plus independent Red, Green, and Blue tonal splines with curve anchor points.
 - **HSL Channel Mixer**: 8 distinct color bands with dedicated Hue, Saturation, and Luminance offsets.
-- **Real-Time Video Scopes**: Live preview-derived RGB Histogram, Waveform monitor, and Vectorscope for objective monitoring.
+- **Real-Time Scopes**: RGB/luminance histogram, waveform, and vectorscope calculated from the rendered WebGL preview.
 
 ### 4. 🔀 Visual Flow (`Alt+4`)
-*Node-based pipeline visualization and non-destructive graph inspection.*
-- **Node-Based Processing Graph**: Inspect each discrete step in the image processing chain (Decode → Source Buffer → Geometry → Denoise → Tone → Optics → Color Grading → Output).
-- **Toggle Node Passes**: Enable or bypass individual processing stages to audit their exact contribution to the final render.
+*Interactive view of the browser processing pipeline.*
+- **Live Output Preview**: View the current image and edits through the WebGL renderer.
+- **Toggle Node Passes**: Bypass supported stages, including tone, color, HSL, curves, grading, detail, dehaze, geometry, vignette, and chroma key.
+- **Fixed Processing Order**: Nodes represent the defined pipeline; arbitrary port rewiring is not supported.
 
 ### 5. 📦 Deliver (`Alt+5`)
 *Batch export queue, watermarking, and production publishing.*
@@ -211,11 +214,15 @@ flowchart TD
 │                     PYTHON COMPUTATIONAL CORE                          │
 │  • SQLite Catalog Persistence & Migrations (WAL Mode)                  │
 │  • LRU Working Buffer & Thumbnail Cache                                │
-│  • 32-bit Float NumPy / Pillow Image Processing DAG Graph              │
+│  • 32-bit Float Python Processing & Full-Resolution Export             │
 │  • ONNX Runtime DirectML / CUDA Inference Engine                       │
 │  • Background ThreadPool Batch Export Manager                          │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+
+The browser also runs the interactive WebGL preview and stores custom presets
+and cached edit states in IndexedDB. Undo/redo stacks are session-local. The
+native catalog is updated when the user explicitly saves an edit state.
 
 ---
 

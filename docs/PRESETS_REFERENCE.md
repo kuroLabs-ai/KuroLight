@@ -1,6 +1,10 @@
 # Presets Catalog & Parameter Reference
 
 KuroLight includes **54 built-in photographic presets** spanning 6 curated categories, designed by colorists and photographers for instant professional looks.
+The browser UI loads the built-in recipes from
+[`web/src/constants/editingPresets.json`](../web/src/constants/editingPresets.json).
+Applying a preset merges its supported parameters into the active browser edit
+state; it does not invoke the Python preset API.
 
 ---
 
@@ -136,4 +140,6 @@ Users can save their active photo edits as custom presets directly in the UI:
 1. Click **Presets** tab in the Lightbox sidebar.
 2. Click **Save Active as Preset**.
 3. Provide a Name and Category.
-4. Custom presets are stored in SQLite and can be searched, applied, or deleted at any time.
+4. Custom presets are stored in browser IndexedDB and can be searched, applied,
+   or deleted in that browser profile. They are separate from the per-photo
+   edit state saved to the native Python catalog.

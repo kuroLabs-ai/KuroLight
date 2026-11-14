@@ -1,6 +1,6 @@
 # Image Processing Pipeline & Color Science
 
-KuroLight uses a non-destructive, node-based Directed Acyclic Graph (DAG) image processing engine operating in **32-bit floating-point precision** (`np.float32`).
+KuroLight has two render paths: a browser-side WebGL renderer for interactive preview, and a Python processing DAG that operates on **32-bit floating-point** (`np.float32`) buffers for full-resolution processing and export. They consume the same saved edit-state model, but preview approximations are not guaranteed to match every Python operation pixel-for-pixel.
 
 ---
 
@@ -17,7 +17,26 @@ Traditional 8-bit integer editing pipelines cause quantization artifacts, color 
 
 ---
 
-## 2. DAG Processing Graph Sequence
+## 2. Browser Preview and Saved Edit State
+
+The React frontend applies interactive adjustments through
+`web/src/utils/webgl/liveFilterRenderer.ts`. The preview supports tone and color
+controls, channel/master curves, HSL, grading, LUTs, local masks, retouch,
+geometry, vignette, and Visual Flow stage bypass/chroma key. It uses browser
+image/canvas and WebGL texture precision; it is not the Python float32
+`ImageBuffer` pipeline.
+
+The browser caches active edit state per asset in IndexedDB. In the native
+application, **Save/Ctrl+S** sends the current `EditState` to Python for catalog
+persistence. The saved state is loaded when the asset is selected again.
+Python remains the full-resolution processing/export path. Detail
+neighborhood filters and some geometry/lens operations in WebGL are
+approximations; compare their output with Python export before relying on
+pixel-identical results.
+
+---
+
+## 3. Python DAG Processing Graph Sequence
 
 Defined in: [`src/kurolight/processing/pipeline.py`](file:///d:/vscode/Kuro.worktrees/kurolight/src/kurolight/processing/pipeline.py) and [`src/kurolight/processing/graph.py`](file:///d:/vscode/Kuro.worktrees/kurolight/src/kurolight/processing/graph.py)
 
@@ -60,7 +79,7 @@ Defined in: [`src/kurolight/processing/pipeline.py`](file:///d:/vscode/Kuro.work
 
 ---
 
-## 3. Node Specifications
+## 4. Node Specifications
 
 ### Node 1: RAW & Raster Decoder
 * Supports `.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.orf`, `.rw2`, `.pef`, `.raf`, `.srw` via `rawpy` (LibRaw).
@@ -91,7 +110,7 @@ Defined in: [`src/kurolight/processing/color/lut.py`](file:///d:/vscode/Kuro.wor
 
 ---
 
-## 4. Cross-Device Color Management (ICC Profiles)
+## 5. Cross-Device Color Management (ICC Profiles)
 
 To guarantee that exported photos look identical across all screens (desktop monitors, mobile phones, WhatsApp, web browsers):
 

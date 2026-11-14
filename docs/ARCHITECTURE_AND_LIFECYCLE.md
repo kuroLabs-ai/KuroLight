@@ -16,19 +16,31 @@ KuroLight combines high-performance Python image processing with a modern, GPU-a
 │  - Animated Splash Screen      │  - React 19 Frontend Shell     │
 │  - Background Bootstrap Thread │  - Lucide Icons / Tailwind CSS │
 ├────────────────────────────────┴────────────────────────────────┤
-│                 IPC Layer: PyBridge (JSON-RPC)                  │
+│                 IPC Layer: PyBridge (JSON bridge)                │
 │   JavaScript (window.pywebview.api) <=====> Python (PyBridge)   │
 ├─────────────────────────────────────────────────────────────────┤
 │                     Backend Services Layer                      │
 │   EditingService  •  LibraryService  •  ExportService           │
-│   PresetService   •  ProjectService  •  KuroAIService           │
+│   ProjectService  •  KuroAIService                              │
 ├─────────────────────────────────────────────────────────────────┤
 │                   Core Processing & Storage                     │
-│  - 32-bit Float Processing DAG Pipeline (NumPy / Pillow)        │
+│  - Python 32-bit Processing Pipeline (full-resolution export)   │
 │  - SQLite 3 Catalog Database (WAL Mode + Thread-Local Conns)    │
 │  - Disk Cache & LRU Thumbnail Store                             │
 └─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                 Browser Editing & Preview Layer                │
+│  - React edit state and WebGL live preview                      │
+│  - IndexedDB cache for edit state, LUT data, and user presets   │
+└─────────────────────────────────────────────────────────────────┘
 ```
+
+The WebGL renderer is the interactive editing preview, not a replacement for
+the Python full-resolution export pipeline. The two paths implement the same
+edit-state contract, but some GPU operations are approximations. In the native
+app, Save/Ctrl+S writes the current browser edit state to the Python catalog;
+selecting that asset later restores the saved state. The browser also keeps a
+local IndexedDB cache for faster state hydration.
 
 ---
 
@@ -51,7 +63,7 @@ The lifecycle starts at `kurolight.run_gui:run()`:
    * **Stage 1**: Database schema verification and migration (`sqlite3` WAL mode).
    * **Stage 2**: Project / catalog verification (`ProjectService`).
    * **Stage 3**: Cache directories and thumbnail store setup (`ThumbnailCache`).
-   * **Stage 4**: Preset catalog initialization (loading 54 built-in recipes).
+   * **Stage 4**: Export service initialization.
    * **Stage 5**: Command dispatcher and AI tool registry setup (`AIToolRegistry`).
    * **Stage 6**: Pywebview web window and IPC bridge setup.
 3. As each stage advances, `worker.stage_changed` signals update the splash screen progress bar.
@@ -69,6 +81,7 @@ Communication between the React web UI and Python backend occurs via `PyBridge`:
 
 * **No HTTP Overhead**: Commands are executed directly via pywebview's in-process JS-to-Python bridge (`window.pywebview.api.<method>()`).
 * **Serialization Protocol**: Complex objects, filters, and edit states are exchanged as JSON strings (`pydantic` and `dataclasses`).
+* **Edit ownership**: Continuous adjustment updates stay in the browser and render through WebGL. The bridge save operation validates and persists an `EditState` through `EditingService`; browser presets and live undo/redo do not call Python preset/history mutation APIs.
 * **Reverse Event Dispatch**: Backend asynchronous events (import progress, export progress, edit previews) are sent to the frontend via `window.evaluate_js()` executing custom DOM events:
   ```javascript
   window.dispatchEvent(new CustomEvent('kurolight:<event_name>', { detail: data }));
