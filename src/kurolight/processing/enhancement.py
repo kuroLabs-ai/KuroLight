@@ -32,6 +32,8 @@ _model_path: Path | None = None
 _model_net: cv2.dnn_Net | None = None
 _model_session = None
 _model_backend = "CPU"
+_model_backend_preference = (True, "auto")
+_loaded_backend_preference: tuple[bool, str] | None = None
 _ort_errors = (
     (
         ort.capi.onnxruntime_pybind11_state.Fail,
@@ -52,6 +54,32 @@ class ProcessingCancelled(Exception):
 
 class ImageEnhancementEngine:
     """Apply conventional detail controls and locally run Real-ESRGAN restoration."""
+
+    @classmethod
+    def set_backend_preference(cls, enable_gpu: bool, gpu_engine: str) -> None:
+        """Set the preferred backend for subsequent local AI restoration runs."""
+        global _model_backend_preference, _model_path
+        preference = (bool(enable_gpu), gpu_engine)
+        if preference[1] not in {"auto", "directml", "cuda", "cpu"}:
+            raise ValueError(f"Unsupported AI restoration backend: {gpu_engine}")
+        with _model_lock:
+            if preference != _model_backend_preference:
+                _model_backend_preference = preference
+                _model_path = None
+
+    @staticmethod
+    def _provider_order(enable_gpu: bool, gpu_engine: str) -> tuple[str, ...]:
+        if not enable_gpu or gpu_engine == "cpu":
+            return ()
+        providers = {
+            "auto": ("DmlExecutionProvider", "CUDAExecutionProvider"),
+            "directml": ("DmlExecutionProvider",),
+            "cuda": ("CUDAExecutionProvider",),
+        }
+        try:
+            return providers[gpu_engine]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported AI restoration backend: {gpu_engine}") from exc
 
     @staticmethod
     def apply_detail(
@@ -181,8 +209,13 @@ class ImageEnhancementEngine:
     @classmethod
     def _get_model(cls, path: Path) -> None:
         global _model_backend, _model_net, _model_path, _model_session
+        global _loaded_backend_preference
         with _model_lock:
-            if _model_path == path and (_model_net is not None or _model_session is not None):
+            if (
+                _model_path == path
+                and _loaded_backend_preference == _model_backend_preference
+                and (_model_net is not None or _model_session is not None)
+            ):
                 return
             if not path.is_file() or path.stat().st_size != _MODEL_SIZE:
                 raise FileNotFoundError(
@@ -196,14 +229,17 @@ class ImageEnhancementEngine:
             _model_session = None
             _model_backend = "CPU"
             available_providers = []
+            enable_gpu, gpu_engine = _model_backend_preference
             if ort is not None:
                 available_providers = ort.get_available_providers()
-                for provider, label in (
-                    ("DmlExecutionProvider", "GPU: DirectML"),
-                    ("CUDAExecutionProvider", "GPU: CUDA"),
-                ):
+                provider_labels = {
+                    "DmlExecutionProvider": "GPU: DirectML",
+                    "CUDAExecutionProvider": "GPU: CUDA",
+                }
+                for provider in cls._provider_order(enable_gpu, gpu_engine):
                     if provider not in available_providers:
                         continue
+                    label = provider_labels[provider]
                     options = ort.SessionOptions()
                     if provider == "DmlExecutionProvider":
                         options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
@@ -229,7 +265,12 @@ class ImageEnhancementEngine:
                             error,
                         )
 
-            if _model_session is None and cv2.cuda.getCudaEnabledDeviceCount() > 0:
+            if (
+                _model_session is None
+                and enable_gpu
+                and gpu_engine in {"auto", "cuda"}
+                and cv2.cuda.getCudaEnabledDeviceCount() > 0
+            ):
                 try:
                     model = cv2.dnn.readNetFromONNX(str(path))
                     model.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
@@ -250,6 +291,7 @@ class ImageEnhancementEngine:
                     model.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
                     _model_net = model
             _model_path = path
+            _loaded_backend_preference = _model_backend_preference
 
     @classmethod
     def compute_device_label(cls) -> str:

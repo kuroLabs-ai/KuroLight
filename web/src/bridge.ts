@@ -4,10 +4,10 @@ import {
   EditState,
   ExportPreset,
   ImageAsset,
-  ColorScopes,
   SmartCollectionRules,
   WorkspaceId,
 } from './types';
+import type { ExportRequest } from './interfaces/bridge';
 import { cacheLocalEditState } from './utils/storage/imageIndexedDb';
 import type {
   PythonApi,
@@ -61,7 +61,6 @@ class PythonBridge {
   } = {
     image_updated: new Set(),
     before_image_updated: new Set(),
-    histogram_updated: new Set(),
     assets_updated: new Set(),
     asset_count_updated: new Set(),
     trash_count_updated: new Set(),
@@ -71,7 +70,6 @@ class PythonBridge {
     asset_selected: new Set(),
     filmstrip_toggled: new Set(),
     workspace_changed: new Set(),
-    color_scopes_updated: new Set(),
     notification: new Set(),
     processing_progress: new Set(),
     ready: new Set(),
@@ -107,7 +105,6 @@ class PythonBridge {
     const events = [
       'image_updated',
       'before_image_updated',
-      'histogram_updated',
       'assets_updated',
       'asset_count_updated',
       'trash_count_updated',
@@ -117,7 +114,6 @@ class PythonBridge {
       'asset_selected',
       'filmstrip_toggled',
       'workspace_changed',
-      'color_scopes_updated',
       'notification',
       'processing_progress',
     ];
@@ -127,17 +123,6 @@ class PythonBridge {
         const args = nativeEvent.detail;
         try {
           switch (event) {
-            case 'histogram_updated':
-              this.emit(event, {
-                r: args[0] as number[],
-                g: args[1] as number[],
-                b: args[2] as number[],
-                lum: args[3] as number[],
-              });
-              break;
-            case 'color_scopes_updated':
-              this.emit(event, args[0] as ColorScopes | null);
-              break;
             case 'assets_updated':
               this.emit(event, JSON.parse(args[0] as string) as ImageAsset[]);
               break;
@@ -556,6 +541,9 @@ class PythonBridge {
   public async proposeAIEdits(
     prompt: string,
     history: Array<{ role: 'user' | 'assistant'; content: string }>,
+    assetId: string,
+    editState: EditState,
+    customLuts: Record<string, { size: number; data_base64: string }>,
   ): Promise<{
     message: string;
     edits: Record<string, unknown>;
@@ -564,7 +552,13 @@ class PythonBridge {
     candidate_state: EditState | null;
     base_state_fingerprint: string;
   }> {
-    const response = await this.bridge?.propose_ai_edits?.(prompt, JSON.stringify(history));
+    const response = await this.bridge?.propose_ai_edits?.(
+      prompt,
+      JSON.stringify(history),
+      assetId,
+      JSON.stringify(editState),
+      JSON.stringify(customLuts),
+    );
     if (typeof response !== 'string') {
       throw new Error('Kuro AI image analysis is available in the KuroLight desktop app.');
     }
@@ -582,11 +576,72 @@ class PythonBridge {
     candidate: EditState,
     assetId: string,
     baseStateFingerprint: string,
+    baseState: EditState,
   ): Promise<void> {
     if (!this.bridge?.apply_ai_proposal) {
       throw new Error('Applying Kuro AI proposals is available in the KuroLight desktop app.');
     }
-    await this.bridge.apply_ai_proposal(JSON.stringify(candidate), assetId, baseStateFingerprint);
+    await this.bridge.apply_ai_proposal(
+      JSON.stringify(candidate),
+      assetId,
+      baseStateFingerprint,
+      JSON.stringify(baseState),
+    );
+  }
+
+  public async prepareAIContext(
+    assetId: string,
+    editState: EditState,
+    customLuts: Record<string, { size: number; data_base64: string }>,
+  ): Promise<void> {
+    const response = await this.bridge?.prepare_ai_context?.(
+      assetId,
+      JSON.stringify(editState),
+      JSON.stringify(customLuts),
+    );
+    if (typeof response !== 'string') {
+      throw new Error('Preparing Kuro AI image context is available in the KuroLight desktop app.');
+    }
+    const result = JSON.parse(response) as { ok: boolean; error?: string };
+    if (!result.ok) {
+      throw new Error(result.error ?? 'Could not prepare the current photo for Kuro AI.');
+    }
+  }
+
+  public async analyzeAutoTone(assetId: string, editState: EditState): Promise<EditState> {
+    const response = await this.bridge?.analyze_auto_tone?.(
+      assetId,
+      JSON.stringify(editState),
+    );
+    if (typeof response !== 'string') {
+      throw new Error('Auto Tone is available in the KuroLight desktop app.');
+    }
+    return JSON.parse(response) as EditState;
+  }
+
+  public async previewAIRestoration(
+    assetId: string,
+    editState: EditState,
+    customLuts: Record<string, { size: number; data_base64: string }>,
+  ): Promise<{ previewUrl: string; cancelled: boolean }> {
+    const response = await this.bridge?.preview_ai_restoration?.(
+      assetId,
+      JSON.stringify(editState),
+      JSON.stringify(customLuts),
+    );
+    if (typeof response !== 'string') {
+      throw new Error('AI restoration preview is available in the KuroLight desktop app.');
+    }
+    const result = JSON.parse(response) as {
+      ok: boolean;
+      cancelled?: boolean;
+      preview_url?: string;
+    };
+    if (result.cancelled) return { previewUrl: '', cancelled: true };
+    if (!result.ok || typeof result.preview_url !== 'string' || !result.preview_url.startsWith('data:image/')) {
+      throw new Error('Python did not return a valid AI restoration preview.');
+    }
+    return { previewUrl: result.preview_url, cancelled: false };
   }
 
   public setRating(assetId: string, rating: number) {
@@ -794,7 +849,7 @@ class PythonBridge {
         ]);
   }
 
-  public exportAssets(settings: Record<string, unknown>): Promise<{
+  public exportAssets(settings: ExportRequest): Promise<{
     ok: boolean;
     job_id?: string;
     status?: string;
@@ -972,14 +1027,14 @@ class PythonBridge {
       const res = await this.bridge.get_preferences();
       return typeof res === 'string' ? (JSON.parse(res) as Preferences) : (res as Preferences) || fallback;
     } catch (err) {
-      console.warn('Could not load preferences from bridge, using fallback:', err);
-      return fallback;
+      console.error('Could not load preferences from Python:', err);
+      throw err;
     }
   }
 
   public async savePreferences(prefs: Partial<Preferences>): Promise<Preferences> {
     if (!this.bridge?.save_preferences) {
-      return this.getPreferences();
+      throw new Error('Saving application preferences is available in the KuroLight desktop app.');
     }
     const res = await this.bridge.save_preferences(JSON.stringify(prefs));
     return typeof res === 'string' ? (JSON.parse(res) as Preferences) : (res as Preferences);

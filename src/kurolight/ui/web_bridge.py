@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import cv2
-import numpy as np
 
 from kurolight.ai.service import KuroAIService
 from kurolight.app import AppState, EditStateSnapshotCommand
@@ -25,19 +24,34 @@ from kurolight.config.app_config import AppConfig
 from kurolight.domain.assets import ImageAsset
 from kurolight.domain.collections import SmartCollectionRules
 from kurolight.domain.editing import CurvePoint, EditState
-from kurolight.domain.export import ColorSpace, ExportFormat, ExportJob, ExportSettings, ResizeMode
+from kurolight.domain.export import (
+    ColorSpace,
+    ExportFormat,
+    ExportJob,
+    ExportLUTPayload,
+    ExportSettings,
+    ResizeMode,
+)
 from kurolight.domain.masking import AdjustmentMask
 from kurolight.domain.metadata import AssetMetadataOverrides
 from kurolight.domain.retouch import RetouchSpot
 from kurolight.processing.analysis.auto_tone import AutoToneAnalyzer
 from kurolight.processing.buffer import ImageBuffer
-from kurolight.processing.color.scopes import ScopesCalculator
+from kurolight.processing.color.lut import LUT3DEngine
 from kurolight.processing.enhancement import ImageEnhancementEngine, ProcessingCancelled
-from kurolight.services.editing_service import EditingService
 from kurolight.services.export_job_manager import ExportJobManager
 from kurolight.services.library_service import SUPPORTED_EXTENSIONS, ImportBatchResult
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_network_allowed(config: Any, operation: str) -> None:
+    """Stop application-initiated network requests when strict offline is enabled."""
+    local_ai = getattr(config, "local_ai", None)
+    if getattr(local_ai, "strict_offline", False):
+        raise RuntimeError(
+            f"{operation} is unavailable while Strict Offline Privacy Mode is enabled."
+        )
 
 
 class _BridgeEvent:
@@ -93,6 +107,7 @@ class _SerializedAPI:
             "propose_ai_edits",
             "cancel_import",
             "download_local_enhancement_model",
+            "preview_ai_restoration",
             "has_local_enhancement_model",
             "cancel_processing",
             "import_files",
@@ -124,7 +139,6 @@ class PyBridge:
     _EVENTS = (
         "image_updated",
         "before_image_updated",
-        "histogram_updated",
         "assets_updated",
         "asset_count_updated",
         "trash_count_updated",
@@ -134,7 +148,6 @@ class PyBridge:
         "asset_selected",
         "filmstrip_toggled",
         "workspace_changed",
-        "color_scopes_updated",
         "notification",
         "processing_progress",
     )
@@ -147,6 +160,7 @@ class PyBridge:
         command_dispatcher: Any,
         export_service: Any = None,
         history_repository: Any = None,
+        project_service: Any = None,
         parent_widget: Any = None,
         parent: Any = None,
     ) -> None:
@@ -155,9 +169,16 @@ class PyBridge:
         self.editing_service = editing_service
         self.command_dispatcher = command_dispatcher
         self.export_service = export_service
+        self.project_service = project_service
         self.history_repository = history_repository
         self.export_job_manager = ExportJobManager(export_service) if export_service else None
         self.config = AppConfig.load()
+        from kurolight.processing.enhancement import ImageEnhancementEngine
+
+        ImageEnhancementEngine.set_backend_preference(
+            self.config.performance.enable_gpu,
+            self.config.performance.gpu_engine,
+        )
         self.kuro_ai_service = KuroAIService()
         self._window: Any = None
         self._lock = threading.RLock()
@@ -170,6 +191,7 @@ class PyBridge:
 
         self._pending_edit_state: Optional[EditState] = None
         self._edit_start_state: Optional[EditState] = None
+        self._prepared_ai_context: Optional[dict[str, str]] = None
         self._filmstrip_visible: bool = True
         self._is_crop_mode: bool = False
         self._active_workspace: str = self.app_state.active_workspace
@@ -183,6 +205,7 @@ class PyBridge:
         self._save_timer = _SingleShotTimer(
             lambda: self._run_serialized(self._do_commit_edit_state), 300
         )
+        self._run_scheduled_backup(on_exit=False)
 
     def _run_serialized(self, callback: Any) -> None:
         with self._lock:
@@ -644,8 +667,6 @@ class PyBridge:
         if not asset.source_path.is_file():
             self.image_updated.emit("")
             self.before_image_updated.emit("")
-            self.histogram_updated.emit([], [], [], [])
-            self.color_scopes_updated.emit(None)
             if asset.id not in self._missing_source_notified:
                 self.notification.emit(
                     "Source Image Missing",
@@ -658,35 +679,13 @@ class PyBridge:
 
         self._missing_source_notified.discard(asset.id)
 
-        # Render the full preview after returning control so the cached thumbnail
-        # can appear and the user can start editing without waiting on processing.
+        # The browser owns interactive rendering; Python provides an unedited source.
         self._render_timer.start(0)
-
-        # 2. Render unedited 'Before' preview in background thread so it never blocks active photo display
-        def _render_before_async() -> None:
-            try:
-                unedited = EditState(asset_id=asset.id)
-                source_buf = self.editing_service.get_or_load_source_buffer(
-                    asset.id, asset.source_path
-                )
-                before_buf = self.editing_service.processor.process(source_buf, unedited)
-                before_url = self._buffer_to_data_url(before_buf)
-                self.before_image_updated.emit(before_url)
-            except Exception as exc:
-                logger.warning("Could not render before preview for %s: %s", asset.file_name, exc)
-
-        threading.Thread(
-            target=_render_before_async,
-            daemon=True,
-            name=f"before-preview-{asset.id}",
-        ).start()
 
     def open_in_develop(self, asset_id: str) -> None:
         """Selects asset and immediately transitions workspace to Lightbox (develop)."""
         self.select_asset(asset_id)
-        self.app_state.set_active_workspace("develop")
-        self._active_workspace = "develop"
-        self.workspace_changed.emit("develop")
+        self.set_workspace("develop")
 
     def set_rating(self, asset_id: str, rating: int) -> None:
         """Update 0-5 star rating for an asset."""
@@ -954,6 +953,7 @@ class PyBridge:
 
     def get_ai_models(self, provider: str, api_key: str = "") -> str:
         """Fetch vision-capable models available to the selected provider key."""
+        _ensure_network_allowed(self.config, "Kuro AI model discovery")
         import keyring
 
         selected_key = api_key.strip() or keyring.get_password(
@@ -983,7 +983,9 @@ class PyBridge:
         active_key = "" if data.get("remove_api_key") else (
             api_key or keyring.get_password("KuroLight", f"kuro-ai:{provider}") or ""
         )
-        if active_key:
+        if active_key and not getattr(
+            getattr(self.config, "local_ai", None), "strict_offline", False
+        ):
             models = self.kuro_ai_service.list_models(provider, active_key)
             if model not in {item["id"] for item in models}:
                 raise ValueError("Choose a model returned by Refresh Models for this provider.")
@@ -1043,6 +1045,13 @@ class PyBridge:
         try:
             clean = str(url).strip()
             if clean.startswith(("https://", "http://")):
+                if getattr(self.config.local_ai, "strict_offline", False):
+                    self.notification.emit(
+                        "External Link Blocked",
+                        "Strict Offline Privacy Mode is enabled.",
+                        "warning",
+                    )
+                    return False
                 return webbrowser.open(clean)
             return False
         except Exception as exc:
@@ -1065,6 +1074,7 @@ class PyBridge:
                 "custom_cache_dir": getattr(getattr(self.config, "storage", None), "custom_cache_dir", "") or "",
                 "backup_schedule": getattr(getattr(self.config, "storage", None), "backup_schedule", "on_exit"),
                 "backup_retention_count": getattr(getattr(self.config, "storage", None), "backup_retention_count", 5),
+                "last_backup_at": getattr(getattr(self.config, "storage", None), "last_backup_at", None),
             },
             "import_settings": {
                 "default_creator": getattr(getattr(self.config, "import_settings", None), "default_creator", ""),
@@ -1091,6 +1101,7 @@ class PyBridge:
                 "confirm_disk_deletion": getattr(self.config.appearance, "confirm_disk_deletion", True),
                 "warn_discard_crop_edits": getattr(self.config.appearance, "warn_discard_crop_edits", True),
             },
+            "last_workspace": self.config.last_workspace,
             "external_editor": {
                 "editor_path": getattr(getattr(self.config, "external_editor", None), "editor_path", ""),
                 "editor_name": getattr(getattr(self.config, "external_editor", None), "editor_name", "Photoshop"),
@@ -1108,12 +1119,14 @@ class PyBridge:
                         setattr(self.config.performance, k, v)
             if "storage" in data and hasattr(self.config, "storage"):
                 for k, v in data["storage"].items():
-                    if hasattr(self.config.storage, k):
+                    if k != "last_backup_at" and hasattr(self.config.storage, k):
                         setattr(self.config.storage, k, v)
             if "import_settings" in data and hasattr(self.config, "import_settings"):
                 for k, v in data["import_settings"].items():
                     if hasattr(self.config.import_settings, k):
                         setattr(self.config.import_settings, k, v)
+                if hasattr(self.library_service, "import_settings"):
+                    self.library_service.import_settings = self.config.import_settings
             if "color_management" in data and hasattr(self.config, "color_management"):
                 for k, v in data["color_management"].items():
                     if hasattr(self.config.color_management, k):
@@ -1131,11 +1144,26 @@ class PyBridge:
                     if hasattr(self.config.external_editor, k):
                         setattr(self.config.external_editor, k, v)
             self.config.save()
+            from kurolight.processing.enhancement import ImageEnhancementEngine
+
+            ImageEnhancementEngine.set_backend_preference(
+                self.config.performance.enable_gpu,
+                self.config.performance.gpu_engine,
+            )
+            cache = getattr(self.library_service, "thumbnail_cache", None)
+            if cache is not None:
+                cache.set_memory_limit(self.config.performance.max_cache_mb)
+                cache.cache_dir = AppConfig.get_cache_dir() / "thumbnails"
+                cache.cache_dir.mkdir(parents=True, exist_ok=True)
             return self.get_preferences()
+
+    def _ensure_network_allowed(self, operation: str) -> None:
+        """Stop application-initiated network requests when strict offline is enabled."""
+        _ensure_network_allowed(self.config, operation)
 
     def get_storage_stats(self) -> str:
         """Calculate and return live storage, catalog, and cache usage metrics."""
-        cache_dir = AppConfig.get_cache_dir()
+        cache_dir = AppConfig.get_cache_dir() / "thumbnails"
         cache_bytes = 0
         cache_files = 0
         if cache_dir.exists():
@@ -1148,8 +1176,14 @@ class PyBridge:
                     except OSError:
                         pass
 
-        data_dir = AppConfig.get_data_dir()
-        db_path = data_dir / "catalog.db"
+        project_db_path = getattr(
+            getattr(self.project_service, "db_manager", None), "db_path", None
+        )
+        db_path = (
+            Path(project_db_path)
+            if project_db_path
+            else AppConfig.get_data_dir() / "catalog.db"
+        )
         db_bytes = db_path.stat().st_size if db_path.exists() else 0
 
         asset_count = 0
@@ -1169,8 +1203,11 @@ class PyBridge:
         })
 
     def clear_cache(self) -> str:
-        """Purge thumbnail and proxy preview cache files to reclaim disk space."""
-        cache_dir = AppConfig.get_cache_dir()
+        """Purge KuroLight's managed thumbnail cache without touching other files."""
+        cache_dir = AppConfig.get_cache_dir() / "thumbnails"
+        thumbnail_cache = getattr(self.library_service, "thumbnail_cache", None)
+        if thumbnail_cache is not None:
+            thumbnail_cache.clear()
         freed = 0
         if cache_dir.exists():
             for root, dirs, files in os.walk(cache_dir, topdown=False):
@@ -1185,39 +1222,92 @@ class PyBridge:
 
     def optimize_database(self) -> str:
         """Run SQLite VACUUM and PRAGMA optimize on the catalog database."""
-        db_path = AppConfig.get_data_dir() / "catalog.db"
-        if db_path.exists():
-            import sqlite3
-            try:
-                con = sqlite3.connect(str(db_path))
-                con.execute("PRAGMA optimize;")
-                con.execute("VACUUM;")
-                con.close()
-                return json.dumps({"ok": True, "message": "Catalog database optimized and vacuumed."})
-            except Exception as exc:
-                return json.dumps({"ok": False, "error": str(exc)})
-        return json.dumps({"ok": True, "message": "Database optimized."})
-
-    def backup_catalog_now(self) -> str:
-        """Create an on-demand verified SQLite backup of the catalog."""
-        import datetime
+        db_path = getattr(
+            getattr(self.project_service, "db_manager", None), "db_path", None
+        )
+        if not db_path or not Path(db_path).is_file():
+            return json.dumps({"ok": False, "error": "No active catalog file to optimize."})
         import sqlite3
-        backups_dir = AppConfig.get_data_dir() / "backups"
-        backups_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        dest = backups_dir / f"catalog_backup_{ts}.db"
-        source = AppConfig.get_data_dir() / "catalog.db"
-        if not source.exists():
-            return json.dumps({"ok": False, "error": "No active catalog file to backup."})
 
         try:
-            src_conn = sqlite3.connect(str(source))
-            dst_conn = sqlite3.connect(str(dest))
-            src_conn.backup(dst_conn)
-            dst_conn.close()
-            src_conn.close()
-            return json.dumps({"ok": True, "path": str(dest)})
+            with sqlite3.connect(str(db_path)) as connection:
+                connection.execute("PRAGMA optimize;")
+                connection.execute("VACUUM;")
+            return json.dumps({
+                "ok": True,
+                "message": "Active project catalog optimized and vacuumed.",
+            })
+        except sqlite3.Error as exc:
+            logger.exception("Catalog optimization failed")
+            return json.dumps({"ok": False, "error": str(exc)})
+
+    def _create_catalog_backup(self) -> Path:
+        import datetime
+
+        if self.project_service is None:
+            raise RuntimeError("The active project service is unavailable for catalog backup.")
+        backups_dir = AppConfig.get_data_dir() / "backups"
+        backups_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        destination = backups_dir / f"catalog_backup_{timestamp}.db"
+        backup_path = self.project_service.backup_catalog(destination)
+        retention = max(1, int(self.config.storage.backup_retention_count))
+        backups = sorted(
+            backups_dir.glob("catalog_backup_*.db"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for expired_backup in backups[retention:]:
+            expired_backup.unlink()
+        return backup_path
+
+    def _run_scheduled_backup(self, *, on_exit: bool) -> None:
+        import datetime
+
+        settings = self.config.storage
+        schedule = settings.backup_schedule
+        if schedule not in {"never", "on_exit", "daily", "weekly"}:
+            logger.error("Unsupported catalog backup schedule: %s", schedule)
+            return
+        if schedule == "never" or (schedule == "on_exit" and not on_exit):
+            return
+        if schedule in {"daily", "weekly"}:
+            if on_exit:
+                return
+            if settings.last_backup_at:
+                try:
+                    last_backup = datetime.datetime.fromisoformat(settings.last_backup_at)
+                except ValueError:
+                    logger.warning("Ignoring invalid last catalog backup timestamp")
+                else:
+                    interval = datetime.timedelta(days=1 if schedule == "daily" else 7)
+                    if datetime.datetime.now() - last_backup < interval:
+                        return
+
+        try:
+            self._create_catalog_backup()
+            settings.last_backup_at = datetime.datetime.now().isoformat(timespec="seconds")
+            self.config.save()
+        except Exception:
+            logger.exception("Scheduled catalog backup failed")
+
+    def on_app_closed(self, *_args: Any) -> None:
+        """Run an on-exit catalog backup after the native window closes."""
+        self._run_scheduled_backup(on_exit=True)
+
+    def backup_catalog_now(self) -> str:
+        """Create and verify an on-demand SQLite backup of the active catalog."""
+        try:
+            backup = self._create_catalog_backup()
+            import datetime
+
+            self.config.storage.last_backup_at = datetime.datetime.now().isoformat(
+                timespec="seconds"
+            )
+            self.config.save()
+            return json.dumps({"ok": True, "path": str(backup)})
         except Exception as exc:
+            logger.exception("Manual catalog backup failed")
             return json.dumps({"ok": False, "error": str(exc)})
 
     def get_local_ai_status(self) -> str:
@@ -1296,8 +1386,88 @@ class PyBridge:
                 merged[key] = value
         return merged
 
-    def propose_ai_edits(self, prompt: str, history_json: str = "[]") -> str:
+    @staticmethod
+    def _decode_ai_custom_luts(
+        custom_luts_json: str, edit_state: EditState
+    ) -> dict[str, Any]:
+        payloads = json.loads(custom_luts_json)
+        if not isinstance(payloads, dict):
+            raise TypeError("Kuro AI custom LUT payload must be an object.")
+
+        lut_name = edit_state.color_grading.lut_name
+        if (
+            not lut_name
+            or edit_state.color_grading.lut_intensity <= 0
+            or lut_name in LUT3DEngine.BUILTIN_LUT_NAMES
+        ):
+            return {}
+
+        payload = payloads.get(lut_name)
+        if not isinstance(payload, dict):
+            raise ValueError(f"Custom LUT '{lut_name}' is unavailable for Kuro AI preview.")
+        size = payload.get("size")
+        data_base64 = payload.get("data_base64")
+        if type(size) is not int or not isinstance(data_base64, str):
+            raise ValueError(f"Custom LUT '{lut_name}' has an invalid transfer payload.")
+        return {lut_name: LUT3DEngine.decode_custom_lut(size, data_base64)}
+
+    def _render_ai_preview(
+        self,
+        source: Any,
+        edit_state: EditState,
+        custom_luts: dict[str, Any],
+    ) -> str:
+        preview_state = edit_state.model_copy(deep=True)
+        preview_state.detail.enhancement_resolution = 0
+        if custom_luts:
+            rendered = self.editing_service.processor.process(
+                source, preview_state, custom_luts=custom_luts
+            )
+        else:
+            rendered = self.editing_service.processor.process(source, preview_state)
+        preview = self.editing_service.processor.create_preview(rendered, max_edge=1280)
+        return self._buffer_to_data_url(preview)
+
+    def prepare_ai_context(
+        self,
+        asset_id: str,
+        edit_state_json: str,
+        custom_luts_json: str = "{}",
+    ) -> str:
+        """Render the current photo locally when Kuro AI opens; do not contact a provider."""
+        state = EditState.model_validate(json.loads(edit_state_json))
+        with self._lock:
+            asset = self.app_state.active_asset
+            if not asset or asset.id != asset_id:
+                raise ValueError("Select the current photo before preparing Kuro AI context.")
+            if state.asset_id != asset.id:
+                raise ValueError("Kuro AI context belongs to a different photo.")
+            if not asset.source_path.is_file():
+                raise FileNotFoundError(f"Could not find '{asset.file_name}' for Kuro AI.")
+            source = self.editing_service.get_or_load_source_buffer(
+                asset.id, asset.source_path
+            )
+            custom_luts = self._decode_ai_custom_luts(custom_luts_json, state)
+            image_url = self._render_ai_preview(source, state, custom_luts)
+            self._prepared_ai_context = {
+                "asset_id": asset.id,
+                "state_fingerprint": self._edit_state_fingerprint(
+                    state.model_dump(mode="json")
+                ),
+                "image_url": image_url,
+            }
+        return json.dumps({"ok": True})
+
+    def propose_ai_edits(
+        self,
+        prompt: str,
+        history_json: str = "[]",
+        asset_id: str = "",
+        edit_state_json: str = "",
+        custom_luts_json: str = "{}",
+    ) -> str:
         """Analyze the current image and return a non-destructive edit proposal."""
+        _ensure_network_allowed(self.config, "Kuro AI image analysis")
         prompt = prompt.strip()
         if not prompt:
             raise ValueError("Enter a question or editing request for Kuro AI.")
@@ -1315,18 +1485,40 @@ class PyBridge:
         with self._lock:
             asset = self.app_state.active_asset
             active_state = self.app_state.current_edit_state
-            if not asset or not active_state or not asset.source_path.exists():
+            if not asset or not asset.source_path.exists():
                 raise ValueError("Select an image before asking Kuro AI.")
-            current_state = active_state.model_copy(deep=True)
+            if asset_id and asset.id != asset_id:
+                raise ValueError("The active photo changed before Kuro AI received its context.")
+            if edit_state_json:
+                current_state = EditState.model_validate(json.loads(edit_state_json))
+            elif active_state:
+                current_state = active_state.model_copy(deep=True)
+            else:
+                raise ValueError("Current photo settings are unavailable for Kuro AI.")
+            if current_state.asset_id != asset.id:
+                raise ValueError("Kuro AI settings belong to a different photo.")
             provider = self.config.ai.provider
             model = self.config.ai.model or ""
             source = self.editing_service.get_or_load_source_buffer(asset.id, asset.source_path)
-            current_render = self.editing_service.processor.process(source, current_state)
-            current_preview = self.editing_service.processor.create_preview(
-                current_render, max_edge=1280
-            )
-            current_image_url = self._buffer_to_data_url(current_preview)
+            custom_luts = self._decode_ai_custom_luts(custom_luts_json, current_state)
             state_data = current_state.model_dump(mode="json")
+            state_fingerprint = self._edit_state_fingerprint(state_data)
+            prepared_context = getattr(self, "_prepared_ai_context", None)
+            if (
+                prepared_context
+                and prepared_context.get("asset_id") == asset.id
+                and prepared_context.get("state_fingerprint") == state_fingerprint
+            ):
+                current_image_url = prepared_context["image_url"]
+            else:
+                current_image_url = self._render_ai_preview(
+                    source, current_state, custom_luts
+                )
+                self._prepared_ai_context = {
+                    "asset_id": asset.id,
+                    "state_fingerprint": state_fingerprint,
+                    "image_url": current_image_url,
+                }
             metadata = {
                 "file_name": asset.file_name,
                 "width": asset.width,
@@ -1369,17 +1561,16 @@ class PyBridge:
         candidate_data = self._merge_ai_edit_proposal(state_data, edits, EditState)
         candidate_state = EditState.model_validate(candidate_data)
         with self._lock:
-            candidate_preview = self.editing_service.processor.process(source, candidate_state)
-            candidate_preview = self.editing_service.processor.create_preview(
-                candidate_preview, max_edge=1280
+            candidate_preview_url = self._render_ai_preview(
+                source, candidate_state, custom_luts
             )
         return json.dumps({
             "message": answer["message"],
             "edits": edits,
             "current_preview": current_image_url,
-            "proposed_preview": self._buffer_to_data_url(candidate_preview) if edits else "",
+            "proposed_preview": candidate_preview_url if edits else "",
             "candidate_state": candidate_state.model_dump(mode="json") if edits else None,
-            "base_state_fingerprint": self._edit_state_fingerprint(state_data),
+            "base_state_fingerprint": state_fingerprint,
         })
 
     @staticmethod
@@ -1392,17 +1583,32 @@ class PyBridge:
         candidate_state_json: str,
         expected_asset_id: str,
         expected_base_fingerprint: str,
+        base_state_json: str = "",
     ) -> None:
         """Commit a reviewed Kuro AI edit proposal to the active image."""
         candidate = EditState.model_validate(json.loads(candidate_state_json))
         asset = self.app_state.active_asset
-        current = self.app_state.current_edit_state
-        if not asset or not current or asset.id != expected_asset_id:
+        active_state = self.app_state.current_edit_state
+        if not asset or asset.id != expected_asset_id:
             raise ValueError("The active image changed. Review a new Kuro AI proposal before applying.")
         if candidate.asset_id != asset.id:
             raise ValueError("Kuro AI proposal belongs to a different image.")
-        if self._edit_state_fingerprint(current.model_dump(mode="json")) != expected_base_fingerprint:
-            raise ValueError("Photo settings changed after this preview. Ask Kuro for a fresh proposal.")
+        if base_state_json:
+            current = EditState.model_validate(json.loads(base_state_json))
+            if current.asset_id != asset.id:
+                raise ValueError("The reviewed settings belong to a different photo.")
+            if self._edit_state_fingerprint(
+                current.model_dump(mode="json")
+            ) != expected_base_fingerprint:
+                raise ValueError("The reviewed Kuro AI proposal has an invalid base state.")
+        else:
+            current = active_state
+            if not current:
+                raise ValueError("Current photo settings are unavailable.")
+            if self._edit_state_fingerprint(
+                current.model_dump(mode="json")
+            ) != expected_base_fingerprint:
+                raise ValueError("Photo settings changed after this preview. Ask Kuro for a fresh proposal.")
 
         self._render_timer.stop()
         self._save_timer.stop()
@@ -1444,10 +1650,6 @@ class PyBridge:
         }
 
     # ── Edit State & Rendering ─────────────────────────────────────────────
-
-    def update_edit_state(self, state_json: str) -> None:
-        """Web-first mode: browser-side engine owns live photo adjustments."""
-        return
 
     def save_edit_state(self, state_json: str) -> None:
         """Persist browser-edited values for an asset in the Python catalog."""
@@ -1627,6 +1829,26 @@ class PyBridge:
         asset_dict = {"id": asset.id, "file_name": asset.file_name}
         self.asset_selected.emit(json.dumps(asset_dict), json.dumps(curr.model_dump()))
 
+    def analyze_auto_tone(self, asset_id: str, edit_state_json: str) -> str:
+        """Return Auto Tone changes based on the active source without persisting them."""
+        state = EditState.model_validate(json.loads(edit_state_json))
+        with self._lock:
+            asset = self.app_state.active_asset
+            if not asset or asset.id != asset_id or state.asset_id != asset.id:
+                raise ValueError("The active photo changed before Auto Tone could run.")
+            if not asset.source_path.is_file():
+                raise FileNotFoundError(f"Could not find '{asset.file_name}' for Auto Tone.")
+            source = self.editing_service.get_or_load_source_buffer(
+                asset.id, asset.source_path
+            )
+
+        exposure, white_balance = AutoToneAnalyzer.analyze(source)
+        candidate = state.model_copy(deep=True)
+        candidate.exposure = exposure
+        candidate.white_balance.temperature = white_balance.temperature
+        candidate.white_balance.tint = white_balance.tint
+        return json.dumps(candidate.model_dump(mode="json"))
+
     def undo(self) -> None:
         curr = self.app_state.current_edit_state
         if self.command_dispatcher and curr:
@@ -1676,6 +1898,9 @@ class PyBridge:
     def set_workspace(self, workspace_id: str) -> None:
         self.app_state.set_active_workspace(workspace_id)
         self._active_workspace = workspace_id
+        if self.config.appearance.startup_workspace == "remember":
+            self.config.last_workspace = workspace_id
+            self.config.save()
         self.workspace_changed.emit(workspace_id)
         if workspace_id == "color_studio":
             self._render_timer.start()
@@ -1734,6 +1959,37 @@ class PyBridge:
 
             data = json.loads(settings_json)
             asset_ids: list = data.get("asset_ids", [])
+            if not isinstance(asset_ids, list) or not all(
+                isinstance(asset_id, str) and asset_id for asset_id in asset_ids
+            ):
+                raise ValueError("Export asset_ids must be a list of non-empty strings")
+            raw_edit_states = data.get("edit_states", {})
+            if not isinstance(raw_edit_states, dict):
+                raise ValueError("Export edit_states must be an object keyed by asset ID")
+            unexpected_edit_ids = set(raw_edit_states) - set(asset_ids)
+            if unexpected_edit_ids:
+                raise ValueError(
+                    "Export edit_states contains unselected asset IDs: "
+                    + ", ".join(sorted(unexpected_edit_ids))
+                )
+            edit_states: dict[str, EditState] = {}
+            for asset_id, state_data in raw_edit_states.items():
+                state = EditState.model_validate(state_data)
+                if state.asset_id != asset_id:
+                    raise ValueError(
+                        f"Edit state asset ID does not match export asset {asset_id}"
+                    )
+                edit_states[asset_id] = state
+
+            raw_custom_luts = data.get("custom_luts", {})
+            if not isinstance(raw_custom_luts, dict):
+                raise ValueError("Export custom_luts must be an object keyed by LUT name")
+            custom_luts: dict[str, ExportLUTPayload] = {}
+            for name, payload in raw_custom_luts.items():
+                if not isinstance(name, str) or not name:
+                    raise ValueError("Custom LUT names must be non-empty strings")
+                custom_luts[name] = ExportLUTPayload.model_validate(payload)
+
             fmt_str: str = str(data.get("format", "JPEG")).lower()
             quality: int = int(data.get("quality", 90))
             color_space_str: str = str(data.get("color_space", "sRGB"))
@@ -1805,7 +2061,31 @@ class PyBridge:
                 asset = self.library_service.asset_repo.get_by_id(aid)
                 if not asset or not asset.source_path.exists():
                     continue
-                edit_state = self.editing_service.get_edit_state(aid)
+                edit_state = edit_states.get(aid)
+                if edit_state is None:
+                    edit_state = (
+                        self.editing_service.edit_state_repo.get_by_asset_id(aid)
+                        or EditState(asset_id=aid)
+                    )
+                lut_name = edit_state.color_grading.lut_name
+                job_custom_luts: dict[str, ExportLUTPayload] = {}
+                flow_nodes = (edit_state.custom_metadata or {}).get("flow_nodes", {})
+                grading_enabled = (
+                    not isinstance(flow_nodes, dict)
+                    or flow_nodes.get("grading", True) is not False
+                )
+                if (
+                    lut_name
+                    and edit_state.color_grading.lut_intensity > 0
+                    and lut_name not in LUT3DEngine.BUILTIN_LUT_NAMES
+                    and grading_enabled
+                ):
+                    payload = custom_luts.get(lut_name)
+                    if payload is None:
+                        raise ValueError(
+                            f"Custom LUT '{lut_name}' is unavailable for final export"
+                        )
+                    job_custom_luts[lut_name] = payload
 
                 resize_mode = ResizeMode.ORIGINAL
                 max_w: Optional[int] = None
@@ -1881,6 +2161,7 @@ class PyBridge:
                     source_path=asset.source_path,
                     settings=settings,
                     edit_state=edit_state,
+                    custom_luts=job_custom_luts,
                     target_path=target_path,
                 ))
 
@@ -2024,12 +2305,9 @@ class PyBridge:
 
     def _do_render_preview(self) -> None:
         asset = self.app_state.active_asset
-        state = self.app_state.current_edit_state
-        if not asset or not state:
+        if not asset:
             return
         if not asset.source_path.is_file():
-            self.histogram_updated.emit([], [], [], [])
-            self.color_scopes_updated.emit(None)
             if asset.id not in self._missing_source_notified:
                 self.image_updated.emit("")
                 self.before_image_updated.emit("")
@@ -2044,76 +2322,45 @@ class PyBridge:
 
         try:
             self._missing_source_notified.discard(asset.id)
-            render_state = state
-            if getattr(self, "_is_crop_mode", False):
-                render_state = state.model_copy(deep=True)
-                render_state.geometry.crop_x = 0.0
-                render_state.geometry.crop_y = 0.0
-                render_state.geometry.crop_width = 1.0
-                render_state.geometry.crop_height = 1.0
-
-            cancel_event = (
-                threading.Event()
-                if render_state.detail.enhancement_resolution > 0
-                and isinstance(self.editing_service, EditingService)
-                else None
+            source = self.editing_service.get_or_load_source_buffer(
+                asset.id, asset.source_path
             )
-            try:
-                if cancel_event is not None:
-                    with self._processing_cancel_lock:
-                        self._active_processing_cancel = cancel_event
-                    rendered = self.editing_service.render_preview(
-                        asset.id,
-                        asset.source_path,
-                        render_state,
-                        progress_callback=lambda percent: self._emit_processing_progress(
-                            percent,
-                            "AI restoration — "
-                            f"{ImageEnhancementEngine.compute_device_label()}",
-                            True,
-                        ),
-                        cancel_event=cancel_event,
-                    )
-                else:
-                    rendered = self.editing_service.render_preview(
-                        asset.id, asset.source_path, render_state
-                    )
-            finally:
-                if cancel_event is not None:
-                    with self._processing_cancel_lock:
-                        if self._active_processing_cancel is cancel_event:
-                            self._active_processing_cancel = None
-                    self._emit_processing_progress(
-                        None,
-                        "Restoring image with local AI",
-                    )
-            if rendered is None:
-                return
-
-            # Convert to Data URL
-            data_url = self._buffer_to_data_url(rendered)
+            preview = self._prepare_source_preview(source)
+            data_url = self._buffer_to_data_url(preview)
             self.image_updated.emit(data_url)
-
-            # Compute Histogram
-            r, g, b, lum = self._compute_histogram(rendered)
-            self.histogram_updated.emit(r, g, b, lum)
-            if self._active_workspace == "color_studio":
-                self.color_scopes_updated.emit(self._compute_color_scopes(rendered))
-
-        except ProcessingCancelled:
-            self.notification.emit(
-                "AI Restoration Cancelled",
-                "The operation was cancelled. No partial result was applied.",
-                "info",
-            )
+            self.before_image_updated.emit(data_url)
         except Exception as e:
             logger.exception("Render error for %s", asset.file_name)
-            self.color_scopes_updated.emit(None)
             self.notification.emit(
-                "Preview Failed",
-                f"Could not render '{asset.file_name}': {e}",
+                "Preview Source Failed",
+                f"Could not load '{asset.file_name}' for browser preview: {e}",
                 "error",
             )
+
+    def _prepare_source_preview(self, source: ImageBuffer) -> ImageBuffer:
+        """Downsample the browser preview according to the saved preview preferences."""
+        quality_scale = {
+            "draft": 0.65,
+            "balanced": 1.0,
+            "high_quality": 1.25,
+        }[self.config.performance.preview_quality]
+        max_edge = int(self.config.performance.preview_max_edge * quality_scale)
+        largest_edge = max(source.width, source.height)
+        if largest_edge <= max_edge:
+            return source
+
+        scale = max_edge / largest_edge
+        return ImageBuffer.from_numpy(
+            cv2.resize(
+                source.data,
+                (
+                    max(1, round(source.width * scale)),
+                    max(1, round(source.height * scale)),
+                ),
+                interpolation=cv2.INTER_AREA,
+            ),
+            color_space=source.color_space,
+        )
 
     def has_local_enhancement_model(self) -> bool:
         return ImageEnhancementEngine.has_model()
@@ -2126,8 +2373,11 @@ class PyBridge:
             progress_event.emit(percent, message, cancellable)
 
     def download_local_enhancement_model(self) -> str:
+        _ensure_network_allowed(self.config, "Local AI model download")
         cancel_event = threading.Event()
         with self._processing_cancel_lock:
+            if self._active_processing_cancel is not None:
+                raise RuntimeError("Another local AI operation is already running.")
             self._active_processing_cancel = cancel_event
         try:
             ImageEnhancementEngine.download_model(
@@ -2152,6 +2402,64 @@ class PyBridge:
                 return False
             cancel_event.set()
             return True
+
+    def preview_ai_restoration(
+        self,
+        asset_id: str,
+        edit_state_json: str,
+        custom_luts_json: str = "{}",
+    ) -> str:
+        state = EditState.model_validate(json.loads(edit_state_json))
+        if state.detail.enhancement_resolution == 0:
+            raise ValueError("Choose an AI restoration target before previewing it.")
+        if not ImageEnhancementEngine.has_model():
+            raise FileNotFoundError("Download the local AI restoration model first.")
+
+        with self._lock:
+            asset = self.app_state.active_asset
+            if not asset or asset.id != asset_id or state.asset_id != asset_id:
+                raise ValueError("The active photo changed before AI restoration started.")
+            if not asset.source_path.is_file():
+                raise FileNotFoundError(f"Could not find '{asset.file_name}' for AI restoration.")
+            source = self.editing_service.get_or_load_source_buffer(
+                asset.id, asset.source_path
+            )
+
+        custom_luts = self._decode_ai_custom_luts(custom_luts_json, state)
+        cancel_event = threading.Event()
+        with self._processing_cancel_lock:
+            if self._active_processing_cancel is not None:
+                raise RuntimeError("Another local AI operation is already running.")
+            self._active_processing_cancel = cancel_event
+
+        try:
+            self._emit_processing_progress(0, "Restoring current photo with local AI", True)
+            rendered = self.editing_service.processor.process(
+                source,
+                state,
+                progress_callback=lambda percent: self._emit_processing_progress(
+                    percent, "Restoring current photo with local AI", True
+                ),
+                cancel_event=cancel_event,
+                custom_luts=custom_luts,
+            )
+            preview = self.editing_service.processor.create_preview(
+                rendered, max_edge=4096
+            )
+            if cancel_event.is_set():
+                raise ProcessingCancelled("AI restoration preview was cancelled")
+            return json.dumps(
+                {"ok": True, "preview_url": self._buffer_to_data_url(preview)}
+            )
+        except ProcessingCancelled:
+            return json.dumps({"ok": False, "cancelled": True})
+        finally:
+            with self._processing_cancel_lock:
+                if self._active_processing_cancel is cancel_event:
+                    self._active_processing_cancel = None
+            self._emit_processing_progress(
+                None, "Restoring current photo with local AI"
+            )
 
     def _do_commit_edit_state(self) -> None:
         state = self.app_state.current_edit_state
@@ -2216,50 +2524,6 @@ class PyBridge:
             return ""
         mime_type = "image/png" if extension == ".png" else "image/jpeg"
         return f"data:{mime_type};base64," + base64.b64encode(enc.tobytes()).decode("ascii")
-
-    def _compute_histogram(self, buf: Any) -> tuple[list, list, list, list]:
-        arr = buf.to_uint8()
-        r = cv2.calcHist([arr], [0], None, [256], [0, 256]).flatten()
-        g = cv2.calcHist([arr], [1], None, [256], [0, 256]).flatten()
-        b = cv2.calcHist([arr], [2], None, [256], [0, 256]).flatten()
-        lum = cv2.calcHist(
-            [cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)], [0], None, [256], [0, 256]
-        ).flatten()
-
-        max_val = max(float(r.max()), float(g.max()), float(b.max()), float(lum.max()), 1.0)
-        r_norm = (r / max_val).tolist()
-        g_norm = (g / max_val).tolist()
-        b_norm = (b / max_val).tolist()
-        lum_norm = (lum / max_val).tolist()
-        return r_norm, g_norm, b_norm, lum_norm
-
-    def _compute_color_scopes(self, buf: Any) -> dict[str, Any]:
-        """Return bounded, quantized scopes for the current rendered preview."""
-        arr = buf.data[..., :3]
-        max_edge = max(arr.shape[:2])
-        if max_edge > 512:
-            scale = 512 / max_edge
-            arr = cv2.resize(
-                arr,
-                (max(1, round(arr.shape[1] * scale)), max(1, round(arr.shape[0] * scale))),
-                interpolation=cv2.INTER_AREA,
-            )
-
-        preview = ImageBuffer.from_numpy(arr, color_space=getattr(buf, "color_space", "sRGB"))
-        waveform = ScopesCalculator.compute_waveform(preview, width=160, height=90)
-        vectorscope = ScopesCalculator.compute_vectorscope(preview, size=112, sample_step=2)
-        return {
-            "waveform": {
-                "width": waveform.shape[1],
-                "height": waveform.shape[0],
-                "data": np.rint(waveform * 255).astype(np.uint8).ravel().tolist(),
-            },
-            "vectorscope": {
-                "width": vectorscope.shape[1],
-                "height": vectorscope.shape[0],
-                "data": np.rint(vectorscope * 255).astype(np.uint8).ravel().tolist(),
-            },
-        }
 
     @staticmethod
     def _apply_dict_to_edit_state(state: EditState, data: dict) -> EditState:

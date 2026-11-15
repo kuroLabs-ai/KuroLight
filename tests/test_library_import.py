@@ -32,6 +32,9 @@ class _AssetRepository:
     def save(self, asset):
         self.assets[asset.id] = asset
 
+    def list_by_project(self, _project_id=None):
+        return list(self.assets.values())
+
     def delete(self, asset_id):
         self.assets.pop(asset_id, None)
 
@@ -102,6 +105,29 @@ def test_import_batch_skips_duplicate_source_paths(tmp_path, monkeypatch):
     assert result.imported[0].id == result.duplicates[0].id
     assert len(assets.assets) == 1
     assert len(thumbnails.generated) == 1
+
+
+def test_hash_duplicate_detection_and_default_metadata(tmp_path, monkeypatch):
+    first = tmp_path / "first.jpg"
+    second = tmp_path / "second.jpg"
+    first.write_bytes(b"same image data")
+    second.write_bytes(b"same image data")
+    service, assets, _, _ = _service(monkeypatch)
+    service.import_settings = SimpleNamespace(
+        duplicate_detection="hash",
+        default_creator="Photographer",
+        default_copyright="Copyright",
+        default_usage_terms="Editorial use",
+    )
+
+    result = service.import_files([first, second])
+
+    assert len(result.imported) == 1
+    assert len(result.duplicates) == 1
+    assert len(assets.assets) == 1
+    assert result.imported[0].metadata_overrides.creator == "Photographer"
+    assert result.imported[0].metadata_overrides.copyright == "Copyright"
+    assert result.imported[0].metadata_overrides.usage_terms == "Editorial use"
 
 
 def test_asset_repository_finds_existing_source_path(tmp_path):
@@ -276,8 +302,6 @@ def test_bridge_import_report_includes_every_file_outcome(tmp_path):
 def test_missing_source_preview_reports_error_and_clears_stale_preview(tmp_path):
     notifications = []
     cleared_previews = []
-    cleared_histograms = []
-    cleared_scopes = []
     asset = SimpleNamespace(
         id="missing-asset",
         file_name="missing.jpg",
@@ -291,8 +315,6 @@ def test_missing_source_preview_reports_error_and_clears_stale_preview(tmp_path)
         _missing_source_notified=set(),
         image_updated=SimpleNamespace(emit=cleared_previews.append),
         before_image_updated=SimpleNamespace(emit=cleared_previews.append),
-        histogram_updated=SimpleNamespace(emit=lambda *args: cleared_histograms.append(args)),
-        color_scopes_updated=SimpleNamespace(emit=cleared_scopes.append),
         notification=SimpleNamespace(emit=lambda *args: notifications.append(args)),
     )
 
@@ -300,8 +322,6 @@ def test_missing_source_preview_reports_error_and_clears_stale_preview(tmp_path)
     PyBridge._do_render_preview(bridge)
 
     assert cleared_previews == ["", ""]
-    assert cleared_histograms == [([], [], [], []), ([], [], [], [])]
-    assert cleared_scopes == [None, None]
     assert len(notifications) == 1
     assert notifications[0][0] == "Source Image Missing"
     assert "saved edits were kept" in notifications[0][1]

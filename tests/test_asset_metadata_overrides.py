@@ -72,7 +72,9 @@ def test_bridge_saves_catalog_overrides_without_changing_exif_source_or_sidecar(
             "title": "Mountain light",
             "description": "Late afternoon",
             "keywords": ["Landscape", "Mountains"],
+            "creator": "",
             "copyright": "Photographer",
+            "usage_terms": "",
         }
         saved = repository.get_by_id(asset.id)
         assert saved is not None

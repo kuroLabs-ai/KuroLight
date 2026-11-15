@@ -34,6 +34,7 @@ class WebWindow:
             command_dispatcher=command_dispatcher,
             export_service=export_service,
             history_repository=project_service.edit_history_repo,
+            project_service=project_service,
         )
         self.api = _SerializedAPI(self.bridge)
 
@@ -49,6 +50,7 @@ class WebWindow:
         )
         self.bridge._window = self.window
         self.window.events.loaded += self._on_loaded
+        self.window.events.closed += self.bridge.on_app_closed
 
     @staticmethod
     def _find_frontend() -> str:

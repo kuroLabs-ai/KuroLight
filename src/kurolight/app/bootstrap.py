@@ -41,6 +41,12 @@ def bootstrap_services(db_path: Optional[Path] = None) -> Dict:
 
     # 2. Load Configuration
     config = AppConfig.load()
+    from kurolight.processing.enhancement import ImageEnhancementEngine
+
+    ImageEnhancementEngine.set_backend_preference(
+        config.performance.enable_gpu,
+        config.performance.gpu_engine,
+    )
 
     # 3. Resolve database path
     if db_path is None:
@@ -59,6 +65,7 @@ def bootstrap_services(db_path: Optional[Path] = None) -> Dict:
         asset_repo=project_service.asset_repo,
         edit_state_repo=project_service.edit_state_repo,
         collection_repo=project_service.collection_repo,
+        import_settings=config.import_settings,
     )
     editing_service = EditingService(edit_state_repo=project_service.edit_state_repo)
     export_service = ExportService()

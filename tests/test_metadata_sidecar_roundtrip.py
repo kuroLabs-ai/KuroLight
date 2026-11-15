@@ -27,7 +27,9 @@ def test_metadata_sidecar_round_trip_and_conflicts(tmp_path):
         "title": "Morning light",
         "description": "Coastal cliffs",
         "keywords": ["Coast", "cliffs"],
+        "creator": "",
         "copyright": "A. Photographer",
+        "usage_terms": "",
     }
 
     imported = MetadataSidecarManager.import_metadata(source_path)

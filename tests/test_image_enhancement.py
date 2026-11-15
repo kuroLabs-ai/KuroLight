@@ -47,6 +47,18 @@ def test_local_sharpening_increases_edge_contrast_without_changing_alpha():
     np.testing.assert_array_equal(image[..., 3], original_alpha)
 
 
+def test_ai_backend_preference_limits_provider_fallbacks():
+    assert ImageEnhancementEngine._provider_order(True, "auto") == (
+        "DmlExecutionProvider",
+        "CUDAExecutionProvider",
+    )
+    assert ImageEnhancementEngine._provider_order(True, "directml") == (
+        "DmlExecutionProvider",
+    )
+    assert ImageEnhancementEngine._provider_order(False, "auto") == ()
+    assert ImageEnhancementEngine._provider_order(True, "cpu") == ()
+
+
 def test_ai_restoration_targets_720p_and_preserves_input(monkeypatch):
     image = np.random.default_rng(42).random((144, 256, 3), dtype=np.float32)
     original = image.copy()
@@ -162,10 +174,15 @@ def test_pipeline_restores_to_720p_and_preserves_alpha(monkeypatch):
         asset_id="ai-restoration",
         detail={"enhancement_resolution": 720},
     )
-    restored = processor.process(ImageBuffer.from_numpy(image), enabled)
+    progress = []
+    restored = processor.process(
+        ImageBuffer.from_numpy(image), enabled, progress_callback=progress.append
+    )
     assert (restored.width, restored.height) == (1280, 720)
     assert restored.has_alpha
     assert restored.data.shape[2] == 4
+    assert progress[0] == 0
+    assert progress[-1] == 100
     np.testing.assert_allclose(
         restored.data[..., 3],
         cv2.resize(alpha, (1280, 720), interpolation=cv2.INTER_LANCZOS4).clip(0, 1),

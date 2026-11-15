@@ -1,5 +1,6 @@
 """Enhanced service handling asset ingestion, metadata extraction, collections, and catalog filtering."""
 
+import hashlib
 import os
 import threading
 from dataclasses import dataclass, field
@@ -54,13 +55,20 @@ class LibraryService:
         edit_state_repo: EditStateRepository,
         collection_repo: Optional[CollectionRepository] = None,
         thumbnail_cache: Optional[ThumbnailCache] = None,
+        import_settings: Any = None,
     ):
         self.asset_repo = asset_repo
         self.edit_state_repo = edit_state_repo
         self.collection_repo = collection_repo
         self.thumbnail_cache = thumbnail_cache or ThumbnailCache()
+        self.import_settings = import_settings
 
-    def import_file(self, file_path: Path, project_id: Optional[str] = None) -> ImageAsset:
+    def import_file(
+        self,
+        file_path: Path,
+        project_id: Optional[str] = None,
+        hash_index: Optional[dict[str, ImageAsset]] = None,
+    ) -> ImageAsset:
         """Ingest single image file, extract comprehensive EXIF, and persist asset record."""
         path = Path(file_path).resolve()
         if not path.is_file():
@@ -71,6 +79,12 @@ class LibraryService:
         existing = self.asset_repo.get_by_source_path(path)
         if existing:
             return existing
+        if self.import_settings and self.import_settings.duplicate_detection == "hash":
+            digest = self._file_sha256(path)
+            index = hash_index if hash_index is not None else self._build_hash_index(project_id)
+            duplicate = index.get(digest)
+            if duplicate:
+                return duplicate
 
         asset = ImageAsset.create(source_path=path, project_id=project_id)
 
@@ -83,6 +97,12 @@ class LibraryService:
         asset.file_size = meta.file_size_bytes
         asset.date_captured = meta.date_captured
         asset.metadata = meta.to_dict()
+        if self.import_settings:
+            asset.metadata_overrides = AssetMetadataOverrides(
+                creator=self.import_settings.default_creator,
+                copyright=self.import_settings.default_copyright,
+                usage_terms=self.import_settings.default_usage_terms,
+            )
 
         self.asset_repo.save(asset)
 
@@ -101,6 +121,25 @@ class LibraryService:
         logger.info("Imported asset: %s (%s)", asset.file_name, asset.id)
         return asset
 
+    @staticmethod
+    def _file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as image_file:
+            for chunk in iter(lambda: image_file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _build_hash_index(self, project_id: Optional[str]) -> dict[str, ImageAsset]:
+        """Hash existing assets once before a hash-based batch import."""
+        index: dict[str, ImageAsset] = {}
+        for asset in self.get_assets(project_id):
+            try:
+                if asset.source_path.is_file():
+                    index.setdefault(self._file_sha256(asset.source_path), asset)
+            except OSError:
+                logger.warning("Could not hash existing image %s", asset.source_path, exc_info=True)
+        return index
+
     def import_files(
         self,
         file_paths: Iterable[Path],
@@ -109,6 +148,12 @@ class LibraryService:
     ) -> ImportBatchResult:
         """Import each path independently, retaining successes if other files fail."""
         result = ImportBatchResult()
+        hash_index = (
+            self._build_hash_index(project_id)
+            if self.import_settings
+            and self.import_settings.duplicate_detection == "hash"
+            else None
+        )
         for file_path in file_paths:
             if cancel_event and cancel_event.is_set():
                 result.cancelled = True
@@ -117,11 +162,21 @@ class LibraryService:
             path = Path(file_path).resolve()
             try:
                 existing = self.asset_repo.get_by_source_path(path)
-                asset = self.import_file(path, project_id=project_id)
                 if existing:
                     result.duplicates.append(existing)
-                elif asset:
+                    continue
+                digest = self._file_sha256(path) if hash_index is not None else None
+                duplicate = hash_index.get(digest) if hash_index is not None else None
+                if duplicate:
+                    result.duplicates.append(duplicate)
+                    continue
+                asset = self.import_file(
+                    path, project_id=project_id, hash_index=hash_index
+                )
+                if asset:
                     result.imported.append(asset)
+                    if hash_index is not None and digest is not None:
+                        hash_index[digest] = asset
             except Exception as exc:
                 logger.exception("Could not import image %s", path)
                 result.failures.append(ImportFailure(path=path, message=str(exc)))

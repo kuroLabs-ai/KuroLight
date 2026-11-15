@@ -1,9 +1,11 @@
 """High-performance persistent disk and memory thumbnail cache."""
 
 import hashlib
+from collections import OrderedDict
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
+
 from PIL import Image
 from PySide6.QtGui import QPixmap
 
@@ -16,12 +18,40 @@ logger = get_logger("infrastructure.cache.thumbnail")
 class ThumbnailCache:
     """Manages generation, disk persistence, and memory caching of image thumbnails."""
 
-    def __init__(self, cache_dir: Optional[Path] = None, default_size: int = 256):
+    def __init__(
+        self,
+        cache_dir: Optional[Path] = None,
+        default_size: int = 256,
+        max_memory_mb: Optional[int] = None,
+    ):
         self.cache_dir = cache_dir or (AppConfig.get_cache_dir() / "thumbnails")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.default_size = default_size
-        self._memory_cache: Dict[str, QPixmap] = {}
-        self._max_memory_items = 500
+        self._memory_cache: OrderedDict[str, QPixmap] = OrderedDict()
+        self._memory_cache_bytes = 0
+        configured_limit = (
+            AppConfig.load().performance.max_cache_mb
+            if max_memory_mb is None
+            else max_memory_mb
+        )
+        self.set_memory_limit(configured_limit)
+
+    def set_memory_limit(self, max_memory_mb: int) -> None:
+        """Set the approximate decoded-thumbnail memory budget and evict oldest entries."""
+        if (
+            isinstance(max_memory_mb, bool)
+            or not isinstance(max_memory_mb, int)
+            or max_memory_mb < 1
+        ):
+            raise ValueError("Thumbnail memory limit must be a positive integer.")
+        self._max_memory_bytes = max_memory_mb * 1024 * 1024
+        while self._memory_cache and self._memory_cache_bytes > self._max_memory_bytes:
+            _, pixmap = self._memory_cache.popitem(last=False)
+            self._memory_cache_bytes -= self._pixmap_memory_size(pixmap)
+
+    @staticmethod
+    def _pixmap_memory_size(pixmap: QPixmap) -> int:
+        return pixmap.width() * pixmap.height() * 4
 
     def get_cache_key(self, source_path: Path, size: int) -> str:
         """Derive persistent cache hash from path, mtime, and dimensions."""
@@ -78,6 +108,7 @@ class ThumbnailCache:
 
         # 1. Memory Cache
         if key in self._memory_cache:
+            self._memory_cache.move_to_end(key)
             return self._memory_cache[key]
 
         # 2. Disk Cache
@@ -91,7 +122,9 @@ class ThumbnailCache:
         # 3. Generate thumbnail
         return self.generate_thumbnail(path, s)
 
-    def generate_thumbnail(self, source_path: Path, size: Optional[int] = None) -> Optional[QPixmap]:
+    def generate_thumbnail(
+        self, source_path: Path, size: Optional[int] = None
+    ) -> Optional[QPixmap]:
         """Synchronously render and save thumbnail to disk and memory."""
         s = size or self.default_size
         path = Path(source_path).resolve()
@@ -119,22 +152,31 @@ class ThumbnailCache:
         return None
 
     def _put_memory(self, key: str, pixmap: QPixmap) -> None:
-        """Add to memory cache with simple eviction."""
-        if len(self._memory_cache) >= self._max_memory_items:
-            # Pop oldest item
-            first_key = next(iter(self._memory_cache))
-            self._memory_cache.pop(first_key, None)
+        """Add a thumbnail and evict least-recently-used entries over the memory budget."""
+        size = self._pixmap_memory_size(pixmap)
+        if size > self._max_memory_bytes:
+            return
+        previous = self._memory_cache.pop(key, None)
+        if previous is not None:
+            self._memory_cache_bytes -= self._pixmap_memory_size(previous)
+        while self._memory_cache and self._memory_cache_bytes + size > self._max_memory_bytes:
+            _, oldest = self._memory_cache.popitem(last=False)
+            self._memory_cache_bytes -= self._pixmap_memory_size(oldest)
         self._memory_cache[key] = pixmap
+        self._memory_cache_bytes += size
 
     def clear(self) -> None:
         """Clear memory cache."""
         self._memory_cache.clear()
+        self._memory_cache_bytes = 0
 
     def invalidate(self, source_path: Path, size: Optional[int] = None) -> None:
         """Invalidate cached thumbnail from both memory and disk."""
         s = size or self.default_size
         key = self.get_cache_key(source_path, s)
-        self._memory_cache.pop(key, None)
+        removed = self._memory_cache.pop(key, None)
+        if removed is not None:
+            self._memory_cache_bytes -= self._pixmap_memory_size(removed)
         disk_path = self.get_thumbnail_path(source_path, s)
         if disk_path.exists():
             disk_path.unlink()

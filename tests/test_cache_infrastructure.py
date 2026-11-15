@@ -1,7 +1,9 @@
 """Tests for ThumbnailCache infrastructure."""
 
 from pathlib import Path
+
 from PIL import Image
+
 from kurolight.infrastructure.cache.thumbnail_cache import ThumbnailCache
 
 
@@ -56,3 +58,17 @@ def test_thumbnail_cache_invalidation(tmp_path: Path):
 
     cache.invalidate(src_image)
     assert not thumb_path.exists()
+
+
+def test_thumbnail_memory_cache_obeys_configured_budget(tmp_path: Path, monkeypatch):
+    cache = ThumbnailCache(
+        cache_dir=tmp_path / "thumbs",
+        max_memory_mb=1,
+    )
+    monkeypatch.setattr(cache, "_pixmap_memory_size", lambda pixmap: pixmap)
+
+    cache._put_memory("older", 700_000)
+    cache._put_memory("newer", 700_000)
+
+    assert list(cache._memory_cache) == ["newer"]
+    assert cache._memory_cache_bytes == 700_000

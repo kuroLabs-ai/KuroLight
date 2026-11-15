@@ -11,7 +11,9 @@ class AssetMetadataOverrides(BaseModel):
     title: str = Field(default="", max_length=256)
     description: str = Field(default="", max_length=5000)
     keywords: list[str] = Field(default_factory=list, max_length=64)
+    creator: str = Field(default="", max_length=256)
     copyright: str = Field(default="", max_length=512)
+    usage_terms: str = Field(default="", max_length=512)
 
     @field_validator("keywords")
     @classmethod

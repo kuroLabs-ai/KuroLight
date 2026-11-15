@@ -1,63 +1,77 @@
 """Application configuration handling using Pydantic and platformdirs."""
 
 from pathlib import Path
-from typing import Optional
-from platformdirs import user_config_dir, user_data_dir, user_cache_dir
-from pydantic import BaseModel, Field
+from typing import ClassVar, Literal, Optional
+
+from platformdirs import user_cache_dir, user_config_dir, user_data_dir
+from pydantic import BaseModel, ConfigDict, Field
 
 from kurolight.config.defaults import (
     APP_NAME,
-    ORGANIZATION_NAME,
-    DEFAULT_THEME,
-    DEFAULT_ACCENT_COLOR,
-    DEFAULT_WORKING_COLOR_SPACE,
-    DEFAULT_PREVIEW_MAX_EDGE,
     AUTOSAVE_INTERVAL_SECONDS,
+    DEFAULT_ACCENT_COLOR,
+    DEFAULT_PREVIEW_MAX_EDGE,
+    DEFAULT_THEME,
+    DEFAULT_WORKING_COLOR_SPACE,
+    ORGANIZATION_NAME,
 )
 
 
 class AppearanceSettings(BaseModel):
     """Visual appearance preferences."""
+    model_config = ConfigDict(validate_assignment=True)
+
     theme: str = DEFAULT_THEME
     accent_color: str = DEFAULT_ACCENT_COLOR
     ui_scale: float = 1.0
     font_family: str = "Inter, Segoe UI, sans-serif"
-    startup_workspace: str = "remember"  # remember, library, develop, color_studio, visual_flow, deliver
+    startup_workspace: Literal[
+        "remember", "library", "develop", "color_studio", "visual_flow", "deliver"
+    ] = "remember"
     confirm_disk_deletion: bool = True
     warn_discard_crop_edits: bool = True
 
 
 class PerformanceSettings(BaseModel):
     """Processing and cache preferences."""
+    model_config = ConfigDict(validate_assignment=True)
+
     enable_gpu: bool = True
-    gpu_engine: str = "auto"  # auto, directml, cuda, cpu
+    gpu_engine: Literal["auto", "directml", "cuda", "cpu"] = "auto"
     selected_gpu_device: str = "Auto-detect High Performance"
-    preview_max_edge: int = DEFAULT_PREVIEW_MAX_EDGE
-    preview_quality: str = "balanced"  # draft, balanced, high_quality
-    max_cache_mb: int = 4096
+    preview_max_edge: int = Field(default=DEFAULT_PREVIEW_MAX_EDGE, ge=512, le=8192)
+    preview_quality: Literal["draft", "balanced", "high_quality"] = "balanced"
+    max_cache_mb: int = Field(default=4096, ge=128, le=65536)
     vram_cache_mb: int = 2048
 
 
 class StorageSettings(BaseModel):
     """Disk storage, caching, and database maintenance settings."""
+    model_config = ConfigDict(validate_assignment=True)
+
     custom_cache_dir: Optional[str] = None
-    backup_schedule: str = "on_exit"  # never, on_exit, daily, weekly
-    backup_retention_count: int = 5
+    backup_schedule: Literal["never", "on_exit", "daily", "weekly"] = "on_exit"
+    backup_retention_count: int = Field(default=5, ge=1, le=50)
+    last_backup_at: Optional[str] = None
 
 
 class ImportSettings(BaseModel):
     """Metadata defaults and photo ingestion rules."""
+    model_config = ConfigDict(validate_assignment=True)
+
     default_creator: str = ""
     default_copyright: str = "© 2026 KuroLabs. All rights reserved."
     default_usage_terms: str = "All rights reserved"
-    duplicate_detection: str = "path"  # path, hash
+    duplicate_detection: Literal["path", "hash"] = "path"
     auto_apply_preset: str = "None"
     raw_preview_priority: str = "embedded_jpeg"  # embedded_jpeg, full_raw
 
 
 class ColorManagementSettings(BaseModel):
     """Color management and proofing settings."""
-    working_space: str = "sRGB"  # sRGB, Display P3, Adobe RGB (1998), ProPhoto RGB
+    working_space: Literal[
+        "sRGB", "Display P3", "Adobe RGB (1998)", "ProPhoto RGB"
+    ] = "sRGB"
     monitor_icc_profile: str = "System Default"
     soft_proofing_enabled: bool = False
     gamut_warning_color: str = "#FF00FF"  # Magenta
@@ -96,6 +110,8 @@ class EditingSettings(BaseModel):
 
 class AppConfig(BaseModel):
     """Root configuration object for KuroLight."""
+    _cache_dir_override: ClassVar[Optional[Path]] = None
+
     schema_version: int = 1
     appearance: AppearanceSettings = Field(default_factory=AppearanceSettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
@@ -126,9 +142,20 @@ class AppConfig(BaseModel):
     @classmethod
     def get_cache_dir(cls) -> Path:
         """Return application cache directory."""
-        path = Path(user_cache_dir(appname=APP_NAME, appauthor=ORGANIZATION_NAME))
+        path = cls._cache_dir_override or Path(
+            user_cache_dir(appname=APP_NAME, appauthor=ORGANIZATION_NAME)
+        )
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    @classmethod
+    def _activate_cache_dir(cls, config: "AppConfig") -> None:
+        configured_path = config.storage.custom_cache_dir
+        cls._cache_dir_override = (
+            Path(configured_path).expanduser().resolve()
+            if configured_path and configured_path.strip()
+            else None
+        )
 
     @classmethod
     def get_config_file_path(cls) -> Path:
@@ -142,13 +169,17 @@ class AppConfig(BaseModel):
         if config_file.exists():
             try:
                 content = config_file.read_text(encoding="utf-8")
-                return cls.model_validate_json(content)
+                config = cls.model_validate_json(content)
             except Exception:
-                return cls()
-        return cls()
+                config = cls()
+        else:
+            config = cls()
+        cls._activate_cache_dir(config)
+        return config
 
     def save(self) -> None:
         """Persist current configuration to disk."""
         config_file = self.get_config_file_path()
         config_file.parent.mkdir(parents=True, exist_ok=True)
         config_file.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        self._activate_cache_dir(self)

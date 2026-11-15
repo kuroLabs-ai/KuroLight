@@ -1,3 +1,4 @@
+import base64
 import json
 
 import numpy as np
@@ -9,7 +10,6 @@ from kurolight.app.command_dispatcher import (
     CommandDispatcher,
     EditStateSnapshotCommand,
 )
-from kurolight.main import _dispatch_cli_command, _print_command_catalog
 from kurolight.domain.assets import ImageAsset
 from kurolight.domain.editing import EditState
 from kurolight.domain.export import (
@@ -18,6 +18,7 @@ from kurolight.domain.export import (
     ExportJob,
     ExportSettings,
 )
+from kurolight.main import _dispatch_cli_command, _print_command_catalog
 from kurolight.processing.buffer import ImageBuffer
 from kurolight.services.editing_service import EditingService
 from kurolight.services.export_service import ExportService
@@ -81,6 +82,130 @@ def test_web_bridge_save_edit_state_persists_values_in_catalog(tmp_path):
         assert restored.tone_curves.rgb_points[1].y == 0.65
     finally:
         project_service.db_manager.close_thread_connection()
+
+
+def test_export_uses_unsaved_browser_state_without_persisting_it(tmp_path):
+    database_path = tmp_path / "catalog.sqlite"
+    source_path = tmp_path / "photo.png"
+    Image.new("RGB", (4, 4), color=(30, 60, 90)).save(source_path)
+    project_service = ProjectService.open_or_create_project(database_path)
+
+    class CapturingExportJobManager:
+        jobs = []
+
+        def start(self, jobs):
+            self.jobs = jobs
+            return "export-job"
+
+    try:
+        project = project_service.get_current_project()
+        assert project is not None
+        asset = ImageAsset.create(source_path, project.id)
+        project_service.asset_repo.save(asset)
+        untouched_path = tmp_path / "untouched.png"
+        Image.new("RGB", (4, 4), color=(90, 60, 30)).save(untouched_path)
+        untouched_asset = ImageAsset.create(untouched_path, project.id)
+        project_service.asset_repo.save(untouched_asset)
+
+        saved_state = EditState(asset_id=asset.id)
+        saved_state.exposure.exposure = 0.25
+        project_service.edit_state_repo.save(saved_state)
+
+        current_state = saved_state.model_copy(deep=True)
+        current_state.exposure.exposure = 1.5
+        current_state.color_grading.lut_name = "Imported Look"
+        cube_data = base64.b64encode(
+            np.full((2, 2, 2, 3), 0.25, dtype="<f4").tobytes()
+        ).decode("ascii")
+        export_jobs = CapturingExportJobManager()
+        bridge = PyBridge.__new__(PyBridge)
+        bridge.library_service = project_service
+        bridge.editing_service = EditingService(project_service.edit_state_repo)
+        bridge.export_service = ExportService()
+        bridge.export_job_manager = export_jobs
+
+        result = json.loads(
+            bridge.export_assets(
+                json.dumps(
+                    {
+                        "asset_ids": [asset.id, untouched_asset.id],
+                        "edit_states": {
+                            asset.id: current_state.model_dump(mode="json")
+                        },
+                        "custom_luts": {
+                            "Imported Look": {
+                                "size": 2,
+                                "data_base64": cube_data,
+                            }
+                        },
+                        "format": "PNG",
+                        "output_folder": str(tmp_path / "exports"),
+                    }
+                )
+            )
+        )
+
+        assert result["ok"]
+        assert export_jobs.jobs[0].edit_state.exposure.exposure == 1.5
+        assert export_jobs.jobs[0].custom_luts["Imported Look"].data_base64 == cube_data
+        assert export_jobs.jobs[1].edit_state.asset_id == untouched_asset.id
+        assert export_jobs.jobs[1].edit_state.exposure.exposure == 0
+        assert (
+            project_service.edit_state_repo.get_by_asset_id(untouched_asset.id)
+            is None
+        )
+        assert project_service.edit_state_repo.get_by_asset_id(
+            asset.id
+        ).exposure.exposure == 0.25
+    finally:
+        project_service.db_manager.close_thread_connection()
+
+
+def test_bridge_preview_sends_raw_source_for_webgl_rendering(tmp_path):
+    source_path = tmp_path / "source.png"
+    source_path.write_bytes(b"source")
+    asset = type(
+        "Asset",
+        (),
+        {"id": "photo", "file_name": "photo.png", "source_path": source_path},
+    )()
+    raw_buffer = ImageBuffer.from_numpy(
+        np.full((2, 2, 3), 0.25, dtype=np.float32)
+    )
+    bridge = PyBridge.__new__(PyBridge)
+    bridge.app_state = type("AppState", (), {"active_asset": asset})()
+    bridge.editing_service = type(
+        "EditingServiceStub",
+        (),
+        {"get_or_load_source_buffer": lambda *_args: raw_buffer},
+    )()
+    bridge._missing_source_notified = set()
+    bridge.config = type(
+        "Config",
+        (),
+        {
+            "performance": type(
+                "Performance",
+                (),
+                {"preview_quality": "balanced", "preview_max_edge": 2048},
+            )(),
+        },
+    )()
+
+    class CapturedEvent:
+        value = None
+
+        def emit(self, value):
+            self.value = value
+
+    bridge.image_updated = CapturedEvent()
+    bridge.before_image_updated = CapturedEvent()
+    bridge.notification = type("NotificationEvent", (), {"emit": lambda *_args: None})()
+
+    bridge._do_render_preview()
+
+    assert bridge.image_updated.value.startswith("data:image/")
+    assert bridge.before_image_updated.value == bridge.image_updated.value
 
 
 def test_dispatcher_supports_typed_registry_and_bridge_dispatch(capsys):
