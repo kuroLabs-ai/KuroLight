@@ -1,8 +1,10 @@
 """Export Service managing full-resolution rendering, encoding, and batch output."""
 
+import io
 import os
 import re
 import tempfile
+import threading
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -10,8 +12,8 @@ from typing import Callable, List, Literal, Optional
 
 import cv2
 import numpy as np
-import io
 from PIL import Image, ImageCms, ImageOps
+
 
 @lru_cache(maxsize=1)
 def get_srgb_profile_bytes() -> bytes:
@@ -29,6 +31,8 @@ from kurolight.domain.export import (
 )
 from kurolight.infrastructure.logging import get_logger
 from kurolight.processing.buffer import ImageBuffer
+from kurolight.processing.color.lut import LUT3DEngine
+from kurolight.processing.enhancement import ProcessingCancelled
 from kurolight.processing.pipeline import DefaultImageProcessor
 from kurolight.processing.raw.decoder import DefaultRawDecoder
 
@@ -324,6 +328,7 @@ class ExportService:
         self,
         job: ExportJob,
         progress_cb: Optional[Callable[[float], None]] = None,
+        cancel_event: threading.Event | None = None,
     ) -> ExportResult:
         """Execute a single export job end-to-end."""
         start_time = time.perf_counter()
@@ -332,6 +337,8 @@ class ExportService:
             progress_cb(0.1)
 
         try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise ProcessingCancelled()
             if not job.settings.strip_metadata:
                 raise ValueError(
                     "Preserving metadata in exported images is not supported; "
@@ -359,7 +366,25 @@ class ExportService:
             # 3. Execute non-destructive pipeline
             if progress_cb:
                 progress_cb(0.6)
-            rendered = self.processor.process(src_buffer, job.edit_state)
+            custom_luts = {
+                name: LUT3DEngine.decode_custom_lut(payload.size, payload.data_base64)
+                for name, payload in job.custom_luts.items()
+            }
+
+            def on_render_progress(percent: int) -> None:
+                bounded_percent = min(100, max(0, percent))
+                if progress_cb:
+                    progress_cb(0.6 + bounded_percent / 100.0 * 0.15)
+
+            rendered = self.processor.process(
+                src_buffer,
+                job.edit_state,
+                progress_callback=on_render_progress,
+                cancel_event=cancel_event,
+                custom_luts=custom_luts,
+            )
+            if cancel_event is not None and cancel_event.is_set():
+                raise ProcessingCancelled()
 
             # 4. Resize if configured
             if progress_cb:
@@ -376,6 +401,8 @@ class ExportService:
                 rendered = self.apply_watermark(rendered, job.settings)
 
             # 6. Encode and save file
+            if cancel_event is not None and cancel_event.is_set():
+                raise ProcessingCancelled()
             uint8_data = rendered.to_uint8()
             pil_img = Image.fromarray(uint8_data)
 
@@ -415,6 +442,8 @@ class ExportService:
                     pil_img.convert("RGB").save(temporary_path, format="PPM")
                 else:
                     pil_img.save(temporary_path)
+                if cancel_event is not None and cancel_event.is_set():
+                    raise ProcessingCancelled()
                 try:
                     os.link(temporary_path, output_path)
                 except FileExistsError as error:
@@ -442,6 +471,18 @@ class ExportService:
                 duration_seconds=duration,
             )
 
+        except ProcessingCancelled:
+            duration = time.perf_counter() - start_time
+            job.status = "cancelled"
+            return ExportResult(
+                job_id=job.id,
+                asset_id=job.asset_id,
+                output_path=job.target_path or (job.settings.output_dir / job.asset_name),
+                success=False,
+                cancelled=True,
+                error_message="Export cancelled.",
+                duration_seconds=duration,
+            )
         except Exception as exc:
             duration = time.perf_counter() - start_time
             job.status = "failed"

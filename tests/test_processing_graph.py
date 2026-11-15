@@ -1,3 +1,5 @@
+import base64
+
 import cv2
 import numpy as np
 import pytest
@@ -10,6 +12,7 @@ from kurolight.domain.editing import EditState
 from kurolight.domain.masking import AdjustmentMask, MaskCombineMode, MaskType
 from kurolight.domain.retouch import RetouchMode, RetouchSpot
 from kurolight.processing.buffer import ImageBuffer
+from kurolight.processing.color.lut import LUT3DEngine
 from kurolight.processing.graph import ProcessingGraph, ProcessingNode
 from kurolight.processing.masking import MaskEngine
 from kurolight.processing.pipeline import DefaultImageProcessor
@@ -97,7 +100,8 @@ def test_processing_version_must_be_positive(version):
 
 def test_pipeline_keeps_chroma_matte_as_a_separate_graph_branch():
     image = np.zeros((8, 8, 3), dtype=np.float32)
-    image[..., 1] = 1.0
+    image[:, :4, 1] = 1.0
+    image[:, 4:, 0] = 1.0
     state = EditState(
         asset_id="green-screen",
         custom_metadata={
@@ -113,7 +117,8 @@ def test_pipeline_keeps_chroma_matte_as_a_separate_graph_branch():
     rendered = DefaultImageProcessor().process(ImageBuffer.from_numpy(image), state)
 
     assert rendered.data.shape == (8, 8, 4)
-    assert rendered.data[..., 3].min() < 1.0
+    np.testing.assert_array_equal(rendered.data[:, :4, 3], 0.0)
+    np.testing.assert_array_equal(rendered.data[:, 4:, 3], 1.0)
 
     state.custom_metadata["flow_nodes"] = {"background_removal": False}
     disabled = DefaultImageProcessor().process(ImageBuffer.from_numpy(image), state)
@@ -160,6 +165,37 @@ def test_pipeline_skips_disabled_masks():
     rendered = DefaultImageProcessor().process(ImageBuffer.from_numpy(image), state)
 
     assert np.allclose(rendered.data, image)
+
+
+def test_pipeline_applies_browser_custom_lut_and_rejects_missing_lut():
+    image = np.full((2, 2, 3), 0.5, dtype=np.float32)
+    state = EditState(
+        asset_id="custom-lut",
+        color_grading={"lut_name": "Imported Look", "lut_intensity": 1.0},
+    )
+    cube = np.full((2, 2, 2, 3), 0.25, dtype=np.float32)
+    processor = DefaultImageProcessor()
+
+    rendered = processor.process(
+        ImageBuffer.from_numpy(image),
+        state,
+        custom_luts={"Imported Look": cube},
+    )
+
+    np.testing.assert_allclose(rendered.data, 0.25, atol=1e-6)
+    with pytest.raises(ValueError, match="unavailable for Python rendering"):
+        processor.process(ImageBuffer.from_numpy(image), state)
+
+
+def test_custom_lut_base64_transfer_round_trips_as_float32():
+    cube = np.arange(2**3 * 3, dtype="<f4").reshape((2, 2, 2, 3)) / 24
+    encoded = base64.b64encode(cube.tobytes()).decode("ascii")
+
+    decoded = LUT3DEngine.decode_custom_lut(2, encoded)
+
+    np.testing.assert_array_equal(decoded, cube)
+    with pytest.raises(ValueError, match="payload length"):
+        LUT3DEngine.decode_custom_lut(2, encoded[:-4])
 
 
 def test_pipeline_paints_brush_mask_with_continuous_stroke_and_preserves_source():

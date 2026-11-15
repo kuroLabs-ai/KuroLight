@@ -11,7 +11,7 @@ class _BlockingExportService:
         self.started = threading.Event()
         self.release = threading.Event()
 
-    def export_job(self, job, progress_cb=None):
+    def export_job(self, job, progress_cb=None, cancel_event=None):
         if job.asset_id == "first":
             self.started.set()
             self.release.wait(timeout=3)
@@ -26,7 +26,7 @@ class _BlockingExportService:
 
 
 class _PartiallyFailingExportService:
-    def export_job(self, job, progress_cb=None):
+    def export_job(self, job, progress_cb=None, cancel_event=None):
         success = job.asset_id != "failed"
         if progress_cb:
             progress_cb(1.0)
@@ -36,6 +36,24 @@ class _PartiallyFailingExportService:
             output_path=job.target_path or job.settings.output_dir / job.asset_name,
             success=success,
             error_message=None if success else "test failure",
+        )
+
+
+class _CancelableExportService:
+    def __init__(self):
+        self.started = threading.Event()
+
+    def export_job(self, job, progress_cb=None, cancel_event=None):
+        self.started.set()
+        assert cancel_event is not None
+        cancel_event.wait(timeout=3)
+        return ExportResult(
+            job_id=job.id,
+            asset_id=job.asset_id,
+            output_path=job.target_path or job.settings.output_dir / job.asset_name,
+            success=False,
+            cancelled=True,
+            error_message="Export cancelled.",
         )
 
 
@@ -89,6 +107,21 @@ def test_batch_cancellation_stops_before_next_image(tmp_path):
     assert cancelled["status"] == "cancelled"
     assert cancelled["completed"] == 1
     assert cancelled["succeeded"] == 1
+
+
+def test_batch_cancel_propagates_to_current_export_without_counting_a_failure(tmp_path):
+    service = _CancelableExportService()
+    manager = ExportJobManager(service)
+    job_id = manager.start([_job("slow", tmp_path)])
+
+    assert service.started.wait(timeout=2)
+    manager.control(job_id, "cancel")
+    cancelled = _wait_for_status(manager, job_id, {"cancelled", "failed"})
+
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["completed"] == 0
+    assert cancelled["failed"] == 0
+    assert cancelled["errors"] == []
 
 
 def test_batch_reports_per_file_failures_and_continues(tmp_path):

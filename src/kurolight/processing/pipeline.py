@@ -1,9 +1,10 @@
 """Default implementation of non-destructive image processing pipeline."""
 
+import hashlib
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import cv2
 import numpy as np
@@ -24,7 +25,7 @@ from kurolight.processing.retouch import RetouchEngine
 logger = get_logger("processing.pipeline")
 
 # Increment when a rendering algorithm changes in a way that should invalidate cached nodes.
-RENDER_PROCESS_VERSION = 4
+RENDER_PROCESS_VERSION = 5
 
 
 class DefaultImageProcessor(ImageProcessor):
@@ -49,6 +50,7 @@ class DefaultImageProcessor(ImageProcessor):
         # Standard raster loading with ICC profile color space normalization
         try:
             import io
+
             from PIL import Image, ImageCms, ImageOps
 
             with Image.open(p) as img:
@@ -117,6 +119,7 @@ class DefaultImageProcessor(ImageProcessor):
         edit_state: EditState,
         progress_callback: Callable[[int], None] | None = None,
         cancel_event: threading.Event | None = None,
+        custom_luts: Mapping[str, np.ndarray] | None = None,
     ) -> ImageBuffer:
         """Execute complete editing chain without mutating original buffer."""
         flow_nodes = (edit_state.custom_metadata or {}).get("flow_nodes", {})
@@ -174,6 +177,13 @@ class DefaultImageProcessor(ImageProcessor):
         else:
             matte_latest = None
 
+        active_spots = [spot for spot in edit_state.retouch_spots if spot.enabled]
+        append_node(
+            "retouch",
+            [spot.model_dump(mode="json") for spot in active_spots],
+            lambda inputs: RetouchEngine.apply_retouch(inputs[0], active_spots).data,
+            node_enabled("retouch") and bool(active_spots),
+        )
         append_node(
             "tone", edit_state.exposure.model_dump(mode="json"),
             lambda inputs: self._apply_exposure_and_tonality(inputs[0], edit_state.exposure),
@@ -194,10 +204,28 @@ class DefaultImageProcessor(ImageProcessor):
             lambda inputs: ToneCurveEvaluator.apply_tone_curves(inputs[0], edit_state.tone_curves),
             node_enabled("curves"),
         )
+        grading_enabled = node_enabled("grading")
+        grading_parameters = edit_state.color_grading.model_dump(mode="json")
+        lut_name = edit_state.color_grading.lut_name
+        lut_data = custom_luts.get(lut_name) if custom_luts and lut_name else None
+        if (
+            grading_enabled
+            and lut_name
+            and edit_state.color_grading.lut_intensity > 0
+            and lut_name not in LUT3DEngine.BUILTIN_LUT_NAMES
+        ):
+            if lut_data is None:
+                raise ValueError(f"Custom LUT '{lut_name}' is unavailable for Python rendering")
+            grading_parameters["custom_lut_sha256"] = hashlib.sha256(
+                np.ascontiguousarray(lut_data).tobytes()
+            ).hexdigest()
         append_node(
-            "grading", edit_state.color_grading.model_dump(mode="json"),
-            lambda inputs: self._apply_color_grading(inputs[0], edit_state.color_grading),
-            node_enabled("grading"),
+            "grading",
+            grading_parameters,
+            lambda inputs: self._apply_color_grading(
+                inputs[0], edit_state.color_grading, lut_data
+            ),
+            grading_enabled,
         )
         active_masks = [mask for mask in edit_state.masks if mask.enabled]
         append_node(
@@ -205,13 +233,6 @@ class DefaultImageProcessor(ImageProcessor):
             [mask.model_dump(mode="json") for mask in active_masks],
             lambda inputs: MaskEngine.apply_masks(inputs[0], active_masks),
             node_enabled("masks") and bool(active_masks),
-        )
-        active_spots = [spot for spot in edit_state.retouch_spots if spot.enabled]
-        append_node(
-            "retouch",
-            [spot.model_dump(mode="json") for spot in active_spots],
-            lambda inputs: RetouchEngine.apply_retouch(inputs[0], active_spots).data,
-            node_enabled("retouch") and bool(active_spots),
         )
         append_node(
             "detail", edit_state.detail.model_dump(mode="json"),
@@ -366,7 +387,9 @@ class DefaultImageProcessor(ImageProcessor):
 
         return np.clip(img, 0.0, 1.0)
 
-    def _apply_color_grading(self, img: np.ndarray, cg) -> np.ndarray:
+    def _apply_color_grading(
+        self, img: np.ndarray, cg, custom_lut: np.ndarray | None = None
+    ) -> np.ndarray:
         has_wheel_changes = not (
             cg.lift.luminance == 0.0
             and cg.gamma.luminance == 0.0
@@ -421,7 +444,11 @@ class DefaultImageProcessor(ImageProcessor):
 
         # Apply 3D Look-Up Table if specified
         if hasattr(cg, "lut_name") and cg.lut_name:
-            lut_cube = LUT3DEngine.create_builtin_lut(cg.lut_name)
+            lut_cube = (
+                custom_lut
+                if custom_lut is not None
+                else LUT3DEngine.create_builtin_lut(cg.lut_name)
+            )
             img = LUT3DEngine.apply_lut(img, lut_cube, intensity=getattr(cg, "lut_intensity", 1.0))
 
         return np.clip(img, 0.0, 1.0)

@@ -1,13 +1,21 @@
 """3D Look-Up Table (LUT) parser and trilinear interpolation engine."""
 
+import base64
+import binascii
 from pathlib import Path
 from typing import Dict, Tuple
+
 import numpy as np
 
 
 class LUT3DEngine:
     """3D Color Cube LUT parser, generator, and trilinear evaluation engine."""
 
+    BUILTIN_LUT_NAMES = frozenset({
+        "Teal & Orange",
+        "Film Bleach Bypass",
+        "Vintage Warmth",
+    })
     _CACHE: Dict[str, np.ndarray] = {}
 
     @classmethod
@@ -54,6 +62,24 @@ class LUT3DEngine:
         cls._CACHE[name] = cube
         return cube
 
+    @staticmethod
+    def decode_custom_lut(size: int, data_base64: str) -> np.ndarray:
+        """Decode and validate a packed float32 LUT received from the browser."""
+        expected_bytes = size**3 * 3 * np.dtype("<f4").itemsize
+        max_base64_length = ((expected_bytes + 2) // 3) * 4
+        if not 2 <= size <= 64 or len(data_base64) != max_base64_length:
+            raise ValueError("Invalid custom LUT dimensions or payload length")
+        try:
+            packed = base64.b64decode(data_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("Custom LUT data is not valid base64") from exc
+        if len(packed) != expected_bytes:
+            raise ValueError("Custom LUT data length does not match its dimensions")
+        cube = np.frombuffer(packed, dtype="<f4").reshape((size, size, size, 3)).copy()
+        if not np.isfinite(cube).all():
+            raise ValueError("Custom LUT data must contain only finite values")
+        return cube
+
     @classmethod
     def parse_cube_file(cls, path: Path) -> Tuple[np.ndarray, int]:
         """Parse standard .cube 3D LUT ASCII specification file."""
@@ -67,6 +93,17 @@ class LUT3DEngine:
                 continue
             if line.startswith("LUT_3D_SIZE"):
                 size = int(line.split()[1])
+            elif line.startswith("DOMAIN_MIN") or line.startswith("DOMAIN_MAX"):
+                parts = line.split()
+                expected = 0.0 if parts[0] == "DOMAIN_MIN" else 1.0
+                try:
+                    domain = [float(value) for value in parts[1:]]
+                except ValueError as exc:
+                    raise ValueError(f"Invalid .cube directive: {line}") from exc
+                if len(domain) != 3 or any(value != expected for value in domain):
+                    raise ValueError(
+                        "Custom .cube input domains are not supported"
+                    )
             elif not line.startswith("TITLE"):
                 parts = line.split()
                 if len(parts) == 3:
@@ -78,8 +115,11 @@ class LUT3DEngine:
         if len(data_points) != size * size * size:
             raise ValueError(f"Invalid .cube file: expected {size**3} entries, found {len(data_points)}")
 
-        # .cube order is R fastest, then G, then B
-        cube = np.array(data_points, dtype=np.float32).reshape((size, size, size, 3))
+        # .cube files list red as the fastest-changing coordinate.
+        file_order = np.array(data_points, dtype=np.float32).reshape(
+            (size, size, size, 3)
+        )
+        cube = np.transpose(file_order, (2, 1, 0, 3)).copy()
         return cube, size
 
     @classmethod

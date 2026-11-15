@@ -1,9 +1,11 @@
 """Protocols and abstract interfaces for image processing and decoding."""
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
+
+import numpy as np
 
 from kurolight.domain.editing import EditState
 from kurolight.processing.buffer import ImageBuffer
@@ -27,6 +29,7 @@ class ImageProcessor(Protocol):
         edit_state: EditState,
         progress_callback: Callable[[int], None] | None = None,
         cancel_event: threading.Event | None = None,
+        custom_luts: Mapping[str, np.ndarray] | None = None,
     ) -> ImageBuffer:
         """Execute full non-destructive parameter pipeline."""
         ...

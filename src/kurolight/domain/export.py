@@ -1,9 +1,10 @@
 """Export domain models, format specifications, and job configurations."""
 
+import uuid
 from enum import Enum
 from pathlib import Path
-from typing import Literal, Optional
-import uuid
+from typing import Dict, Literal, Optional
+
 from pydantic import BaseModel, Field
 
 from kurolight.domain.editing import EditState
@@ -54,6 +55,13 @@ class ExportSettings(BaseModel):
     watermark_position: str = "bottom_right"  # "bottom_right", "bottom_left", "center", "top_right"
 
 
+class ExportLUTPayload(BaseModel):
+    """Compact transfer format for a browser-loaded custom .cube LUT."""
+
+    size: int = Field(ge=2, le=64)
+    data_base64: str
+
+
 class ExportJob(BaseModel):
     """Individual unit of work in an export batch."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -63,6 +71,7 @@ class ExportJob(BaseModel):
     target_path: Optional[Path] = None
     settings: ExportSettings
     edit_state: EditState
+    custom_luts: Dict[str, ExportLUTPayload] = Field(default_factory=dict)
     status: str = "pending"  # "pending", "processing", "completed", "failed", "cancelled"
     progress: float = 0.0
     error_message: Optional[str] = None
@@ -77,3 +86,4 @@ class ExportResult(BaseModel):
     file_size_bytes: int = 0
     duration_seconds: float = 0.0
     error_message: Optional[str] = None
+    cancelled: bool = False

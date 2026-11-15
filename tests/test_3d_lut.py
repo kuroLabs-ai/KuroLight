@@ -1,7 +1,10 @@
 """Tests for 3D Look-Up Table (LUT) parser, generator, and trilinear interpolation."""
 
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import pytest
+
 from kurolight.processing.color.lut import LUT3DEngine
 
 
@@ -69,6 +72,8 @@ def test_parse_cube_file(tmp_path: Path):
     cube_file = tmp_path / "test.cube"
     content = """TITLE "Test LUT"
 LUT_3D_SIZE 2
+DOMAIN_MIN 0.0 0.0 0.0
+DOMAIN_MAX 1.0 1.0 1.0
 
 0.0 0.0 0.0
 1.0 0.0 0.0
@@ -85,3 +90,18 @@ LUT_3D_SIZE 2
     assert size == 2
     assert cube.shape == (2, 2, 2, 3)
     assert cube.dtype == np.float32
+    for r in range(size):
+        for g in range(size):
+            for b in range(size):
+                np.testing.assert_array_equal(cube[r, g, b], [r, g, b])
+
+
+def test_parse_cube_file_rejects_custom_input_domain(tmp_path: Path):
+    cube_file = tmp_path / "custom-domain.cube"
+    cube_file.write_text(
+        "LUT_3D_SIZE 2\nDOMAIN_MIN -1 0 0\nDOMAIN_MAX 1 1 1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="input domains are not supported"):
+        LUT3DEngine.parse_cube_file(cube_file)

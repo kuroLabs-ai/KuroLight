@@ -108,8 +108,15 @@ class ExportJobManager:
                 with batch.lock:
                     batch.progress = min(1.0, (current_index + value) / len(batch.jobs))
 
-            result = self.export_service.export_job(job, progress_cb=on_progress)
+            result = self.export_service.export_job(
+                job,
+                progress_cb=on_progress,
+                cancel_event=batch.cancel_event,
+            )
             with batch.lock:
+                if result.cancelled:
+                    batch.current_asset = ""
+                    break
                 batch.completed += 1
                 batch.succeeded += int(result.success)
                 batch.failed += int(not result.success)
