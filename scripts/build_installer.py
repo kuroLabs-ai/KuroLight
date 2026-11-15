@@ -162,7 +162,6 @@ def ensure_installer_artwork(output_dir: Path = INSTALLER_ASSETS_DIR) -> tuple[P
     banner.alpha_composite(wordmark, ((164 - wordmark.width) // 2, 203))
 
     draw = ImageDraw.Draw(banner)
-    draw.rounded_rectangle((14, 14, 149, 299), radius=13, outline=(112, 145, 190, 90), width=1)
     for index in range(72):
         ratio = index / 71
         color = (int(0 + 74 * ratio), int(203 - 112 * ratio), int(255 - 4 * ratio), 230)
