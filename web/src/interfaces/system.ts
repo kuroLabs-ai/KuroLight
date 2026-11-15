@@ -1,4 +1,5 @@
 export interface Preferences {
+  last_workspace?: string;
   performance: {
     enable_gpu: boolean;
     gpu_engine: 'auto' | 'directml' | 'cuda' | 'cpu';
@@ -12,6 +13,7 @@ export interface Preferences {
     custom_cache_dir: string;
     backup_schedule: 'never' | 'on_exit' | 'daily' | 'weekly';
     backup_retention_count: number;
+    last_backup_at?: string | null;
   };
   import_settings: {
     default_creator: string;

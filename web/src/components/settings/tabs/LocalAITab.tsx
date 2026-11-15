@@ -91,11 +91,11 @@ export const LocalAITab: React.FC<LocalAITabProps> = ({
                     <button
                       type="button"
                       onClick={onDownloadModel}
-                      disabled={busy}
+                      disabled={busy || prefs.local_ai.strict_offline}
                       className="px-3 py-1.5 rounded-lg bg-obsidian-accent hover:bg-blue-600 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50"
                     >
                       <Download size={12} />
-                      <span>Download (67 MB)</span>
+                      <span>{prefs.local_ai.strict_offline ? 'Offline mode enabled' : 'Download (67 MB)'}</span>
                     </button>
                   )
                 ) : (

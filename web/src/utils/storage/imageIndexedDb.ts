@@ -21,19 +21,11 @@ export async function getCachedThumbnail(assetId: string): Promise<string | unde
 }
 
 export async function cacheLocalEditState(assetId: string, editState: EditState): Promise<void> {
-  try {
-    await set(`${EDIT_PREFIX}${assetId}`, editState);
-  } catch (err) {
-    console.warn('IndexedDB edit state cache error:', err);
-  }
+  await set(`${EDIT_PREFIX}${assetId}`, editState);
 }
 
 export async function getCachedLocalEditState(assetId: string): Promise<EditState | undefined> {
-  try {
-    return await get<EditState>(`${EDIT_PREFIX}${assetId}`);
-  } catch {
-    return undefined;
-  }
+  return get<EditState>(`${EDIT_PREFIX}${assetId}`);
 }
 
 export async function clearAssetCache(assetId: string): Promise<void> {

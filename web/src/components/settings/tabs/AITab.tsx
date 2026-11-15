@@ -17,6 +17,7 @@ export interface AITabProps {
   removeKey: boolean;
   setRemoveKey: (remove: boolean) => void;
   refreshingModels: boolean;
+  strictOffline: boolean;
   refreshModels: () => Promise<void>;
   testConnection: () => Promise<void>;
 }
@@ -34,6 +35,7 @@ export const AITab: React.FC<AITabProps> = ({
   removeKey,
   setRemoveKey,
   refreshingModels,
+  strictOffline,
   refreshModels,
   testConnection,
 }) => {
@@ -44,6 +46,11 @@ export const AITab: React.FC<AITabProps> = ({
           <ShieldCheck size={13} className="text-emerald-400" />
           <span>Kuro AI Privacy & Credential Contract</span>
         </div>
+        {strictOffline && (
+          <p role="status" className="text-amber-300">
+            Strict Offline is enabled. Provider requests are blocked; saved credentials and preferences can still be managed locally.
+          </p>
+        )}
         <ul className="list-disc pl-4 space-y-1">
           <li>
             <strong className="text-obsidian-textSec">Keychain Isolation:</strong> API credentials are stored in your OS-native secure credential vault.
@@ -134,7 +141,7 @@ export const AITab: React.FC<AITabProps> = ({
         <button
           type="button"
           onClick={() => void refreshModels()}
-          disabled={refreshingModels}
+          disabled={refreshingModels || strictOffline}
           className="rounded-lg border border-obsidian-border px-3 py-2 text-xs font-semibold text-white hover:bg-obsidian-hover disabled:opacity-50 cursor-pointer"
         >
           {refreshingModels ? 'Loading…' : 'Refresh'}
@@ -142,7 +149,7 @@ export const AITab: React.FC<AITabProps> = ({
         <button
           type="button"
           onClick={() => void testConnection()}
-          disabled={refreshingModels}
+          disabled={refreshingModels || strictOffline}
           className="rounded-lg border border-obsidian-accent/50 px-3 py-2 text-xs font-semibold text-obsidian-accent hover:bg-obsidian-accent/10 disabled:opacity-50 cursor-pointer"
         >
           Test connection

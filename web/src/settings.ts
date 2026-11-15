@@ -15,14 +15,14 @@ export {
 export type { ShortcutId, ShortcutBindings, ShortcutDefinition };
 
 export function getShortcutFromEvent(event: KeyboardEvent): string | null {
-  if (!event.ctrlKey && !event.shiftKey && !event.altKey) return null;
+  if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) return null;
   if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) return null;
 
   const key = KEY_NAMES[event.key] ?? (
     event.key.length === 1 ? event.key.toUpperCase() : event.key
   );
   const modifiers = [
-    ...(event.ctrlKey ? ['Ctrl'] : []),
+    ...(event.ctrlKey || event.metaKey ? ['Ctrl'] : []),
     ...(event.shiftKey ? ['Shift'] : []),
     ...(event.altKey ? ['Alt'] : []),
   ];

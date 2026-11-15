@@ -30,4 +30,5 @@ export interface AISettings {
 export interface SettingsPopupProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: SettingsTab;
 }

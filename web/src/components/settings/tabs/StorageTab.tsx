@@ -94,13 +94,37 @@ export const StorageTab: React.FC<StorageTabProps> = ({
               <span>Backup Catalog</span>
             </div>
             <span className="text-[10px] text-obsidian-textMut">
-              Create a verified online backup of catalog.db.
+              Create a verified backup of the active project catalog.
             </span>
           </button>
         </div>
       </div>
 
       {/* Automated backup settings */}
+      {prefs && (
+        <div>
+          <SectionHeader>Cache Location</SectionHeader>
+          <label className={labelClass} htmlFor="custom-cache-dir">Custom Cache Folder</label>
+          <input
+            id="custom-cache-dir"
+            type="text"
+            value={prefs.storage.custom_cache_dir}
+            onChange={(event) => {
+              setPrefs({
+                ...prefs,
+                storage: { ...prefs.storage, custom_cache_dir: event.target.value },
+              });
+              setPrefsDirty(true);
+            }}
+            placeholder="Leave empty to use the system cache folder"
+            className={inputClass}
+          />
+          <p className="mt-1.5 text-[10px] text-obsidian-textMut">
+            Applies to new cache activity after saving. Existing cache files stay in their current folder.
+          </p>
+        </div>
+      )}
+
       {prefs && (
         <div>
           <SectionHeader>Automated Backups</SectionHeader>

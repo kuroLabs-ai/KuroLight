@@ -4,6 +4,7 @@ import { Preferences } from '@/interfaces/system';
 import { ACCENT_SWATCHES } from '@/constants/theme';
 import { SectionHeader } from '../SectionHeader';
 import { inputClass, labelClass } from '../styles';
+import { applyUiScale } from '@/utils/theme';
 
 export interface AppearanceTabProps {
   prefs: Preferences;
@@ -84,8 +85,41 @@ export const AppearanceTab: React.FC<AppearanceTabProps> = ({
             <option value="library">Gallery</option>
             <option value="develop">Lightbox (Develop)</option>
             <option value="color_studio">Color Studio</option>
+            <option value="visual_flow">Visual Flow</option>
             <option value="deliver">Deliver (Batch Export)</option>
           </select>
+        </div>
+      </div>
+
+      <div>
+        <SectionHeader>Interface Scale</SectionHeader>
+        <div className="max-w-sm">
+          <div className="mb-1.5 flex justify-between">
+            <span className={labelClass + ' mb-0'}>UI Scale</span>
+            <span className="font-mono text-xs text-white">
+              {Math.round(prefs.appearance.ui_scale * 100)}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0.8}
+            max={1.2}
+            step={0.05}
+            value={prefs.appearance.ui_scale}
+            onChange={(event) => {
+              const uiScale = Number(event.target.value);
+              setPrefs({
+                ...prefs,
+                appearance: { ...prefs.appearance, ui_scale: uiScale },
+              });
+              applyUiScale(uiScale);
+              setPrefsDirty(true);
+            }}
+            className="w-full cursor-pointer accent-obsidian-accent"
+          />
+          <div className="flex justify-between text-[9px] text-obsidian-textMut">
+            <span>80%</span><span>100%</span><span>120%</span>
+          </div>
         </div>
       </div>
 
@@ -105,7 +139,7 @@ export const AppearanceTab: React.FC<AppearanceTabProps> = ({
               }}
               className="accent-obsidian-accent"
             />
-            <span>Confirm before permanently deleting photos from disk</span>
+            <span>Confirm before permanently removing photos from Recently Deleted</span>
           </label>
           <label className="flex items-center gap-2.5 text-xs text-obsidian-textSec cursor-pointer">
             <input
@@ -120,7 +154,7 @@ export const AppearanceTab: React.FC<AppearanceTabProps> = ({
               }}
               className="accent-obsidian-accent"
             />
-            <span>Warn when discarding unapplied crop or mask edits</span>
+            <span>Warn when discarding an unfinished crop adjustment</span>
           </label>
         </div>
       </div>

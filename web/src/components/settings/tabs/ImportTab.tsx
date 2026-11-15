@@ -52,6 +52,22 @@ export const ImportTab: React.FC<ImportTabProps> = ({
               className={inputClass}
             />
           </div>
+          <div>
+            <span className={labelClass}>Usage Terms</span>
+            <input
+              type="text"
+              value={prefs.import_settings.default_usage_terms}
+              onChange={(e) => {
+                setPrefs({
+                  ...prefs,
+                  import_settings: { ...prefs.import_settings, default_usage_terms: e.target.value },
+                });
+                setPrefsDirty(true);
+              }}
+              placeholder="e.g. All rights reserved"
+              className={inputClass}
+            />
+          </div>
         </div>
       </div>
 
@@ -79,27 +95,10 @@ export const ImportTab: React.FC<ImportTabProps> = ({
             </select>
           </div>
 
-          <div>
-            <span className={labelClass}>RAW Preview Priority</span>
-            <select
-              value={prefs.import_settings.raw_preview_priority}
-              onChange={(e) => {
-                setPrefs({
-                  ...prefs,
-                  import_settings: {
-                    ...prefs.import_settings,
-                    raw_preview_priority: e.target.value as Preferences['import_settings']['raw_preview_priority'],
-                  },
-                });
-                setPrefsDirty(true);
-              }}
-              className={inputClass}
-            >
-              <option value="embedded_jpeg">Embedded Camera JPEG (Instant)</option>
-              <option value="full_raw">Full Sensor RAW Decode</option>
-            </select>
-          </div>
         </div>
+        <p className="mt-2 text-[10px] text-obsidian-textMut">
+          RAW previews currently use the available image decoder; embedded-versus-full RAW priority is not configurable yet.
+        </p>
       </div>
     </div>
   );

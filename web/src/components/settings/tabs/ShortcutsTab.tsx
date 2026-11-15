@@ -7,6 +7,7 @@ import { SectionHeader } from '../SectionHeader';
 export interface ShortcutsTabProps {
   shortcuts: ShortcutBindings;
   setShortcuts: React.Dispatch<React.SetStateAction<ShortcutBindings>>;
+  setShortcutsDirty: (dirty: boolean) => void;
   recordingShortcut: ShortcutId | null;
   setRecordingShortcut: (id: ShortcutId | null) => void;
   setError: (err: string) => void;
@@ -16,6 +17,7 @@ export interface ShortcutsTabProps {
 export const ShortcutsTab: React.FC<ShortcutsTabProps> = ({
   shortcuts,
   setShortcuts,
+  setShortcutsDirty,
   recordingShortcut,
   setRecordingShortcut,
   setError,
@@ -37,24 +39,46 @@ export const ShortcutsTab: React.FC<ShortcutsTabProps> = ({
                   className="flex items-center justify-between gap-3 border-b border-obsidian-border/70 bg-obsidian-deep px-3 py-2 last:border-b-0"
                 >
                   <span className="text-[11px] text-obsidian-textSec">{definition.label}</span>
-                  <button
-                    type="button"
-                    aria-label={`Record shortcut for ${definition.label}`}
-                    onClick={() => {
-                      setRecordingShortcut(definition.id);
-                      setError('');
-                      setMessage('');
-                    }}
-                    className={`min-w-32 rounded-md border px-2.5 py-1.5 text-[10px] font-mono font-semibold cursor-pointer ${
-                      recordingShortcut === definition.id
-                        ? 'animate-pulse border-obsidian-accent bg-obsidian-accent/15 text-obsidian-accent'
-                        : 'border-obsidian-border bg-obsidian-card text-white hover:border-obsidian-accent/50'
-                    }`}
-                  >
-                    {recordingShortcut === definition.id
-                      ? 'Press Ctrl / Shift / Alt + key…'
-                      : shortcuts[definition.id]}
-                  </button>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      aria-label={`Record shortcut for ${definition.label}`}
+                      onClick={() => {
+                        setRecordingShortcut(definition.id);
+                        setError('');
+                        setMessage('');
+                      }}
+                      className={`min-w-32 rounded-md border px-2.5 py-1.5 text-[10px] font-mono font-semibold cursor-pointer ${
+                        recordingShortcut === definition.id
+                          ? 'animate-pulse border-obsidian-accent bg-obsidian-accent/15 text-obsidian-accent'
+                          : 'border-obsidian-border bg-obsidian-card text-white hover:border-obsidian-accent/50'
+                      }`}
+                    >
+                      {recordingShortcut === definition.id
+                        ? 'Press Ctrl / Shift / Alt + key…'
+                        : shortcuts[definition.id]}
+                    </button>
+                    {shortcuts[definition.id] !== definition.defaultValue && (
+                      <button
+                        type="button"
+                        aria-label={`Restore default shortcut for ${definition.label}`}
+                        title={`Restore ${definition.defaultValue}`}
+                        onClick={() => {
+                          setShortcuts((current) => ({
+                            ...current,
+                            [definition.id]: definition.defaultValue,
+                          }));
+                          setShortcutsDirty(true);
+                          setRecordingShortcut(null);
+                          setError('');
+                          setMessage(`Restored ${definition.label}. Save to apply.`);
+                        }}
+                        className="rounded p-1.5 text-obsidian-textMut hover:bg-obsidian-hover hover:text-white"
+                      >
+                        <RotateCcw size={11} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               )
             )}
@@ -66,7 +90,9 @@ export const ShortcutsTab: React.FC<ShortcutsTabProps> = ({
           type="button"
           onClick={() => {
             setShortcuts({ ...DEFAULT_SHORTCUTS });
+            setShortcutsDirty(true);
             setRecordingShortcut(null);
+            setError('');
             setMessage('Default shortcuts restored. Save to apply.');
           }}
           className="inline-flex items-center gap-1.5 rounded-lg border border-obsidian-border px-3 py-2 text-xs font-semibold text-obsidian-textMut hover:text-white cursor-pointer"

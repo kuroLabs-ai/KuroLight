@@ -20,9 +20,9 @@ export const PerformanceTab: React.FC<PerformanceTabProps> = ({
       <div className="rounded-lg border border-obsidian-accent/30 bg-obsidian-accent/5 p-3 text-[10.5px] text-obsidian-textMut leading-relaxed">
         <div className="flex items-center gap-2 font-bold text-white mb-1">
           <Zap size={13} className="text-amber-400" />
-          <span>GPU Acceleration & Rendering Pipeline</span>
+          <span>GPU Acceleration</span>
         </div>
-        Hardware-accelerated rendering uses DirectML and CUDA with automatic CPU fallback to guarantee output fidelity.
+        GPU selection applies to local AI restoration only. The browser preview uses WebGL, while export follows its own processing pipeline.
       </div>
 
       <div>
@@ -46,7 +46,7 @@ export const PerformanceTab: React.FC<PerformanceTabProps> = ({
               <span>Enable GPU Acceleration</span>
             </label>
             <span className="text-[10px] text-obsidian-textMut block">
-              Accelerates histogram updates, slider processing, and export.
+              Accelerates local AI restoration when a supported GPU backend is available.
             </span>
           </div>
 
@@ -94,9 +94,9 @@ export const PerformanceTab: React.FC<PerformanceTabProps> = ({
               }}
               className={inputClass}
             >
-              <option value="draft">Draft — Maximum Responsiveness</option>
-              <option value="balanced">Balanced — Fast with Float Precision</option>
-              <option value="high_quality">High Quality — Full Float32</option>
+              <option value="draft">Draft — Faster, lower-resolution preview</option>
+              <option value="balanced">Balanced — Default preview resolution</option>
+              <option value="high_quality">High Quality — More preview detail</option>
             </select>
           </div>
 

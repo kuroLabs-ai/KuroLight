@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Bot,
   Cpu,
@@ -29,7 +29,7 @@ import {
   SHORTCUT_DEFINITIONS,
   type ShortcutId,
 } from '@/settings';
-import { applyAccentColor } from '@/utils/theme';
+import { applyAccentColor, applyUiScale } from '@/utils/theme';
 import { SettingsTab, AISettings, SettingsPopupProps, PROVIDER_MODELS } from './types';
 import {
   PerformanceTab,
@@ -82,10 +82,17 @@ const NAV_GROUPS = [
   },
 ];
 
-export const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose }) => {
-  const [tab, setTab] = useState<SettingsTab>('performance');
+export const SettingsPopup: React.FC<SettingsPopupProps> = ({
+  isOpen,
+  onClose,
+  initialTab = 'performance',
+}) => {
+  const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [shortcuts, setShortcuts] = useState(loadShortcuts);
+  const [shortcutsDirty, setShortcutsDirty] = useState(false);
   const [recordingShortcut, setRecordingShortcut] = useState<ShortcutId | null>(null);
+  const savedAccentColor = useRef<string | null>(null);
+  const savedUiScale = useRef<number | null>(null);
 
   // Kuro AI state
   const [aiSettings, setAiSettings] = useState<AISettings>({
@@ -127,32 +134,53 @@ export const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose })
   useEffect(() => {
     if (!isOpen) return;
 
-    void bridge.getAppInfo().then(setAppInfo);
-    void bridge.getPreferences().then((p) => {
+    void bridge.getAppInfo().then(setAppInfo).catch((cause: unknown) => {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    });
+    const preferencesRequest = bridge.getPreferences();
+    void preferencesRequest.then((p) => {
       setPrefs(p);
       if (p?.appearance?.accent_color) {
+        savedAccentColor.current = p.appearance.accent_color;
         applyAccentColor(p.appearance.accent_color);
       }
+      if (typeof p?.appearance?.ui_scale === 'number') {
+        savedUiScale.current = p.appearance.ui_scale;
+        applyUiScale(p.appearance.ui_scale);
+      }
+    }).catch((cause: unknown) => {
+      setError(cause instanceof Error ? cause.message : String(cause));
     });
-    void bridge.getStorageStats().then(setStorageStats);
-    void bridge.getLocalAIStatus().then((res) => setLocalModels(res.models));
+    void bridge.getStorageStats().then(setStorageStats).catch((cause: unknown) => {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    });
+    void bridge.getLocalAIStatus().then((res) => setLocalModels(res.models)).catch((cause: unknown) => {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    });
 
-    void bridge
-      .getAISettings()
-      .then(async (settings) => {
-        setAiSettings(settings);
-        if (settings.has_api_key) {
-          try {
-            setModels(await bridge.getAIModels(settings.provider, ''));
-          } catch (cause) {
-            setError(cause instanceof Error ? cause.message : String(cause));
-            setModels([]);
-          }
-        } else {
-          setModels(PROVIDER_MODELS[settings.provider]);
+    void preferencesRequest.then(async (preferences) => {
+      const settings = await bridge.getAISettings();
+      setAiSettings(settings);
+      if (settings.has_api_key && !preferences.local_ai.strict_offline) {
+        try {
+          setModels(await bridge.getAIModels(settings.provider, ''));
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+          setModels([]);
         }
-      })
+      } else {
+        setModels(PROVIDER_MODELS[settings.provider]);
+      }
+    })
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    return () => {
+      if (savedAccentColor.current) applyAccentColor(savedAccentColor.current);
+      if (savedUiScale.current !== null) applyUiScale(savedUiScale.current);
+    };
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -174,10 +202,27 @@ export const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose })
     applyAccentColor(color);
   };
 
+  const cancelSettings = () => {
+    if (savedAccentColor.current) {
+      applyAccentColor(savedAccentColor.current);
+    }
+    if (savedUiScale.current !== null) applyUiScale(savedUiScale.current);
+    onClose();
+  };
+
   const recordShortcut = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!recordingShortcut) return;
+    if (!recordingShortcut) {
+      if (event.key === 'Escape') cancelSettings();
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
+    if (event.key === 'Escape') {
+      setRecordingShortcut(null);
+      setError('');
+      setMessage('Shortcut recording cancelled.');
+      return;
+    }
     const shortcut = getShortcutFromEvent(event.nativeEvent);
     if (!shortcut) {
       if (!['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) {
@@ -193,6 +238,7 @@ export const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose })
       return;
     }
     setShortcuts((current) => ({ ...current, [recordingShortcut]: shortcut }));
+    setShortcutsDirty(true);
     setRecordingShortcut(null);
     setError('');
     setMessage('Shortcut captured — save to apply.');
@@ -326,14 +372,17 @@ export const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose })
     setError('');
     setMessage('');
     try {
-      if (tab === 'shortcuts') {
-        saveShortcuts(shortcuts);
-      }
       if (prefsDirty && prefs) {
-        await bridge.savePreferences(prefs);
+        const savedPreferences = await bridge.savePreferences(prefs);
+        setPrefs(savedPreferences);
+        savedAccentColor.current = savedPreferences.appearance.accent_color;
+        savedUiScale.current = savedPreferences.appearance.ui_scale;
+        window.dispatchEvent(new CustomEvent('kurolight:preferences-updated', {
+          detail: savedPreferences,
+        }));
         setPrefsDirty(false);
       }
-      if (tab === 'ai' || apiKey || removeKey || aiDirty) {
+      if (apiKey || removeKey || aiDirty) {
         const saved = await bridge.saveAISettings({
           provider: aiSettings.provider,
           model: aiSettings.model,
@@ -348,6 +397,10 @@ export const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose })
         setRemoveKey(false);
         setAiDirty(false);
       }
+      if (shortcutsDirty) {
+        saveShortcuts(shortcuts);
+        setShortcutsDirty(false);
+      }
       setMessage('Changes saved.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -361,7 +414,7 @@ export const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose })
       className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-4"
       onKeyDown={recordShortcut}
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) cancelSettings();
       }}
     >
       <section
@@ -383,7 +436,7 @@ export const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose })
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={cancelSettings}
             aria-label="Close settings"
             className="rounded p-1.5 text-obsidian-textMut hover:bg-obsidian-hover hover:text-white cursor-pointer"
           >
@@ -475,6 +528,7 @@ export const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose })
                 removeKey={removeKey}
                 setRemoveKey={setRemoveKey}
                 refreshingModels={refreshingModels}
+                strictOffline={prefs?.local_ai.strict_offline ?? false}
                 refreshModels={refreshModels}
                 testConnection={testConnection}
               />
@@ -505,6 +559,7 @@ export const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose })
               <ShortcutsTab
                 shortcuts={shortcuts}
                 setShortcuts={setShortcuts}
+                setShortcutsDirty={setShortcutsDirty}
                 recordingShortcut={recordingShortcut}
                 setRecordingShortcut={setRecordingShortcut}
                 setError={setError}
@@ -538,7 +593,7 @@ export const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose })
             {tab === 'about' ? (
               <button
                 type="button"
-                onClick={onClose}
+                onClick={cancelSettings}
                 className="rounded-lg bg-obsidian-hover px-4 py-2 text-xs font-semibold text-white hover:bg-obsidian-card cursor-pointer"
               >
                 Close
@@ -555,7 +610,10 @@ export const SettingsPopup: React.FC<SettingsPopupProps> = ({ isOpen, onClose })
                 <button
                   type="button"
                   onClick={() => void save()}
-                  disabled={busy}
+                  disabled={
+                    busy ||
+                    (!prefsDirty && !shortcutsDirty && !aiDirty && !apiKey && !removeKey)
+                  }
                   className="inline-flex items-center gap-1.5 rounded-lg bg-obsidian-accent px-4 py-2 text-xs font-semibold text-white hover:bg-blue-600 disabled:opacity-50 cursor-pointer shadow-sm"
                 >
                   <Save size={13} />
