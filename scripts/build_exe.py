@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
 from PIL import Image
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -62,7 +63,12 @@ def build_frontend():
     if not shutil.which(npm_cmd):
         raise RuntimeError(f"Could not find '{npm_cmd}'. Please install Node.js and npm.")
 
-    res = subprocess.run([npm_cmd, "--prefix", str(WEB_DIR), "run", "build"], cwd=ROOT_DIR, shell=(sys.platform == "win32"))
+    res = subprocess.run(
+        [npm_cmd, "--prefix", str(WEB_DIR), "run", "build"],
+        check=False,
+        cwd=ROOT_DIR,
+        shell=(sys.platform == "win32"),
+    )
     if res.returncode != 0:
         raise RuntimeError("Frontend build failed. Please check TypeScript and Vite errors above.")
 
@@ -90,7 +96,7 @@ def build_executable(mode: str = "both"):
         str(spec_file),
     ]
 
-    res = subprocess.run(cmd, cwd=ROOT_DIR, env=env)
+    res = subprocess.run(cmd, check=False, cwd=ROOT_DIR, env=env)
     if res.returncode != 0:
         raise RuntimeError(f"PyInstaller build failed for mode '{mode}'.")
 
@@ -146,7 +152,7 @@ def verify_build(mode: str = "both"):
     if mode in ("both", "onefile"):
         if onefile_exe.exists():
             size_mb = onefile_exe.stat().st_size / (1024 * 1024)
-            print(f"[✓] OneFile Executable:")
+            print("[✓] OneFile Executable:")
             print(f"    Path: {onefile_exe}")
             print(f"    Size: {size_mb:.2f} MB")
         else:
@@ -156,7 +162,7 @@ def verify_build(mode: str = "both"):
         if onefolder_exe.exists():
             total_size = sum(f.stat().st_size for f in onefolder_dir.rglob("*") if f.is_file())
             file_count = sum(1 for f in onefolder_dir.rglob("*") if f.is_file())
-            print(f"[✓] OneFolder Package (Open Directory / Fast Launch):")
+            print("[✓] OneFolder Package (Open Directory / Fast Launch):")
             print(f"    Directory: {onefolder_dir}")
             print(f"    Binary:    {onefolder_exe}")
             print(f"    Files:     {file_count} files ({total_size / (1024 * 1024):.2f} MB)")
@@ -190,7 +196,7 @@ def main():
             build_frontend()
         build_executable(mode=args.mode)
         verify_build(mode=args.mode)
-    except Exception as exc:
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as exc:
         print(f"\nERROR: Build failed: {exc}", file=sys.stderr)
         sys.exit(1)
 

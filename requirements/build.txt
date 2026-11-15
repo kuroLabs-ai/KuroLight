@@ -1,0 +1,4 @@
+# Dependencies required to build the Windows application distributions.
+-r base.txt
+-r image-processing.txt
+pyinstaller>=6.0
