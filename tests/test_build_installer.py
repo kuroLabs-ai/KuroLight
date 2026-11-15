@@ -10,7 +10,7 @@ from scripts.build_installer import (
 
 
 def test_installer_version_matches_project_metadata():
-    assert APP_VERSION == "1.0.0"
+    assert APP_VERSION == "1.1.1"
 
 
 def test_installer_artwork_uses_kuro_branding_and_inno_dimensions(tmp_path: Path):

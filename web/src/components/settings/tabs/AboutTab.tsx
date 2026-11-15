@@ -39,7 +39,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
             />
             <img src={kuroLightWordmark} alt="KuroLight" className="h-7 object-contain" />
             <span className="rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-0.5 text-[10px] font-bold text-emerald-400">
-              v{appInfo?.version ?? '1.0.0'}
+              v{appInfo?.version ?? '1.1.1'}
             </span>
             <span className="rounded-full bg-obsidian-border px-2 py-0.5 text-[10px] font-semibold text-obsidian-textSec">
               {appInfo?.release_channel ?? 'Production'}

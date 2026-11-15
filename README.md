@@ -16,7 +16,7 @@ all from one focused desktop workspace.
   <a href="#run-from-source">Run from source</a>
 </p>
 
-![Version](https://img.shields.io/badge/version-1.0.0-38bdf8?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.1.1-38bdf8?style=flat-square)
 ![Windows](https://img.shields.io/badge/desktop-Windows-2563eb?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)
 ![React](https://img.shields.io/badge/React-19-149eca?style=flat-square)
@@ -134,7 +134,7 @@ python scripts/build_installer.py --rebuild
 
 The script packages the application, creates branded setup-wizard artwork from
 the KuroLight logo, and writes the installer to
-`dist/installer/KuroLight-Setup-v1.0.0-x64.exe`. The installer offers a
+`dist/installer/KuroLight-Setup-v1.1.1-x64.exe`. The installer offers a
 standard folder install and a single-file option. Read the
 [Windows release guide](docs/WINDOWS_RELEASE.md) before distributing a build.
 

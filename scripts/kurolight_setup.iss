@@ -1,7 +1,7 @@
 ; KuroLight Windows installer. Version is supplied by build_installer.py.
 
 #ifndef MyAppVersion
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.1"
 #endif
 
 #define MyAppName "KuroLight"

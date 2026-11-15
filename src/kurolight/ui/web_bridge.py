@@ -1022,7 +1022,7 @@ class PyBridge:
         return json.dumps({
             "name": "KuroLight",
             "tagline": "Intelligent Visual Creation & Photo Editing Engine",
-            "version": "1.0.0",
+            "version": "1.1.1",
             "build": "2026.11",
             "release_channel": "Desktop Production",
             "python_version": sys.version.split()[0],

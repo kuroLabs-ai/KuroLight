@@ -34,7 +34,7 @@ The script:
 Expected output:
 
 ```text
-dist/installer/KuroLight-Setup-v1.0.0-x64.exe
+dist/installer/KuroLight-Setup-v1.1.1-x64.exe
 ```
 
 Application artifacts are written under `dist/onefile/` and `dist/onefolder/`.

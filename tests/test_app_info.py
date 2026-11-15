@@ -21,7 +21,7 @@ def test_get_app_info():
     data = json.loads(raw)
 
     assert data["name"] == "KuroLight"
-    assert data["version"] == "1.0.0"
+    assert data["version"] == "1.1.1"
     assert "github.com" in data["github_url"]
     assert "discord.gg" in data["discord_url"]
     assert "config_path" in data

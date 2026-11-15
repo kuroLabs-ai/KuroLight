@@ -93,7 +93,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           <img src={kuroLightLogo} alt="KuroLight" className="h-6 w-6 object-contain rounded-md drop-shadow-sm" />
           <img src={kuroLightWordmark} alt="KuroLight" className="h-7 w-auto object-contain" />
           <span className="hidden rounded-full border border-white/10 bg-white/[0.045] px-2 py-0.5 text-[9px] font-semibold tracking-wide text-obsidian-textMut xl:inline-flex">
-            v1.0.0
+            v1.1.1
           </span>
         </div>
 
