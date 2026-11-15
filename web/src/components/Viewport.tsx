@@ -58,6 +58,7 @@ export interface ViewportProps {
   imageUrl?: string;
   beforeImageUrl?: string;
   thumbnailPreviewUrl?: string;
+  restorationPreviewUrl?: string;
   activeAssetId?: string;
   dimensions?: { width: number; height: number };
   masks?: AdjustmentMask[];
@@ -244,6 +245,7 @@ export const Viewport: React.FC<ViewportProps> = ({
   imageUrl,
   beforeImageUrl,
   thumbnailPreviewUrl,
+  restorationPreviewUrl,
   activeAssetId,
   dimensions,
   masks = [],
@@ -664,6 +666,10 @@ export const Viewport: React.FC<ViewportProps> = ({
                   borderRadius: '2px',
                   overflow: 'hidden',
                   flexShrink: 0,
+                  backgroundColor: '#292929',
+                  backgroundImage:
+                    'repeating-conic-gradient(#404040 0% 25%, #292929 0% 50%)',
+                  backgroundSize: '20px 20px',
                 }}
               >
                 <img
@@ -679,11 +685,8 @@ export const Viewport: React.FC<ViewportProps> = ({
                     height: isCropActive ? '100%' : `${100 / appliedCropRect.h}%`,
                     objectFit: 'fill',
                     display:
-                      isWebGLReady &&
-                      loadedImageDims?.assetId === activeAssetId &&
-                      (rotation !== 0 ||
-                        geometry?.horizontal_flip ||
-                        geometry?.vertical_flip)
+                      restorationPreviewUrl ||
+                      (isWebGLReady && loadedImageDims?.assetId === activeAssetId)
                         ? 'none'
                         : 'block',
                     pointerEvents: 'none',
@@ -698,11 +701,26 @@ export const Viewport: React.FC<ViewportProps> = ({
                     inset: 0,
                     width: '100%',
                     height: '100%',
-                    display: isWebGLReady ? 'block' : 'none',
+                    display: isWebGLReady && !restorationPreviewUrl ? 'block' : 'none',
                     imageRendering: 'auto',
                     pointerEvents: 'none',
                   }}
                 />
+                {restorationPreviewUrl && (
+                  <img
+                    src={restorationPreviewUrl}
+                    alt="AI restoration preview"
+                    draggable={false}
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'contain',
+                      pointerEvents: 'none',
+                    }}
+                  />
+                )}
 
                 <canvas
                   ref={guideCanvasRef}

@@ -15,6 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import { bridge } from '../../bridge';
+import { encodeLUTCube, isBuiltinLUT, loadLUT } from '../../utils/webgl/lut';
 import type { EditState, ImageAsset } from '../../types';
 
 interface KuroAIPopupProps {
@@ -22,6 +23,7 @@ interface KuroAIPopupProps {
   onClose: () => void;
   activeAssetId?: string;
   activeFileName?: string;
+  editState: EditState;
   onSelectAsset?: (id: string) => void;
   availableAssets?: ImageAsset[];
 }
@@ -34,11 +36,26 @@ interface ChatMessage {
 }
 
 interface PendingProposal {
+  assetId: string;
+  baseState: EditState;
   candidate: EditState;
   currentPreview: string;
   proposedPreview: string;
   edits: Record<string, unknown>;
   baseStateFingerprint: string;
+}
+
+async function getCustomLuts(state: EditState) {
+  const name = state.color_grading.lut_name;
+  if (!name || isBuiltinLUT(name)) return {};
+
+  const cube = await loadLUT(name);
+  if (!cube) {
+    throw new Error(`The selected custom LUT "${name}" is not available in browser storage.`);
+  }
+  return {
+    [name]: { size: cube.size, data_base64: encodeLUTCube(cube) },
+  };
 }
 
 const CATEGORIZED_SUGGESTIONS = [
@@ -69,6 +86,7 @@ export const KuroAIPopup: React.FC<KuroAIPopupProps> = ({
   onClose,
   activeAssetId,
   activeFileName,
+  editState,
   onSelectAsset,
   availableAssets = [],
 }) => {
@@ -79,10 +97,45 @@ export const KuroAIPopup: React.FC<KuroAIPopupProps> = ({
   const [proposal, setProposal] = useState<PendingProposal | null>(null);
   const [busy, setBusy] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [preparingContext, setPreparingContext] = useState(false);
+  const [contextReady, setContextReady] = useState(false);
   const [error, setError] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editStateRef = useRef(editState);
+
+  useEffect(() => {
+    editStateRef.current = editState;
+  }, [editState]);
+
+  useEffect(() => {
+    if (!isOpen || !activeAssetId) return;
+
+    let cancelled = false;
+    const currentState = structuredClone(editStateRef.current);
+    void Promise.resolve().then(async () => {
+      if (cancelled) return;
+      setPreparingContext(true);
+      setContextReady(false);
+      setError('');
+      try {
+        const customLuts = await getCustomLuts(currentState);
+        await bridge.prepareAIContext(activeAssetId, currentState, customLuts);
+        if (!cancelled) setContextReady(true);
+      } catch (cause: unknown) {
+        if (!cancelled) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        }
+      } finally {
+        if (!cancelled) setPreparingContext(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, activeAssetId]);
 
   // Auto-focus input when opened
   useEffect(() => {
@@ -176,12 +229,22 @@ export const KuroAIPopup: React.FC<KuroAIPopupProps> = ({
     setMessages((current) => [...current, { role: 'user', content: text, assetId: activeAssetId }]);
 
     try {
+      const baseState = structuredClone(editState);
+      const customLuts = await getCustomLuts(baseState);
       const history = messages.map(({ role, content }) => ({ role, content }));
-      const result = await bridge.proposeAIEdits(text, history);
+      const result = await bridge.proposeAIEdits(
+        text,
+        history,
+        activeAssetId,
+        baseState,
+        customLuts,
+      );
       setMessages((current) => [...current, { role: 'assistant', content: result.message }]);
 
       if (result.candidate_state && result.proposed_preview) {
         setProposal({
+          assetId: activeAssetId,
+          baseState,
           candidate: result.candidate_state,
           currentPreview: result.current_preview,
           proposedPreview: result.proposed_preview,
@@ -207,6 +270,14 @@ export const KuroAIPopup: React.FC<KuroAIPopupProps> = ({
 
   const approve = async () => {
     if (!proposal || !activeAssetId) return;
+    if (proposal.assetId !== activeAssetId) {
+      setError('The active photo changed. Ask Kuro for a new proposal for this image.');
+      return;
+    }
+    if (JSON.stringify(editState) !== JSON.stringify(proposal.baseState)) {
+      setError('Photo settings changed after this preview. Ask Kuro for a fresh proposal.');
+      return;
+    }
     setApplying(true);
     setError('');
     try {
@@ -214,6 +285,7 @@ export const KuroAIPopup: React.FC<KuroAIPopupProps> = ({
         proposal.candidate,
         activeAssetId,
         proposal.baseStateFingerprint,
+        proposal.baseState,
       );
       setProposal(null);
       setMessages((current) => [
@@ -263,6 +335,15 @@ export const KuroAIPopup: React.FC<KuroAIPopupProps> = ({
             <p className="mt-0.5 truncate text-[10.5px] text-obsidian-textMut" title={activeFileName || ''}>
               {activeFileName || (activeAssetId ? 'Photo ready' : 'Select an image to start')}
             </p>
+            {activeAssetId && (
+              <p className="mt-0.5 text-[9px] text-obsidian-textMut" role="status">
+                {preparingContext
+                  ? 'Preparing current edits locally…'
+                  : contextReady
+                    ? 'Photo ready · shared only after your prompt'
+                    : 'Photo context will be prepared locally'}
+              </p>
+            )}
           </div>
         </div>
 

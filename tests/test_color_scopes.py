@@ -5,7 +5,6 @@ import numpy as np
 import pytest
 
 from kurolight.domain.assets import ImageAsset
-from kurolight.domain.editing import EditState
 from kurolight.processing.buffer import ImageBuffer
 from kurolight.processing.color.scopes import HistogramData, ScopesCalculator
 from kurolight.ui.web_bridge import PyBridge
@@ -37,7 +36,7 @@ def test_vectorscope_places_neutral_gray_at_center() -> None:
     assert np.count_nonzero(vectorscope) == 1
 
 
-def test_bridge_emits_scopes_from_the_rendered_preview(tmp_path: Path) -> None:
+def test_bridge_emits_unedited_source_for_browser_preview(tmp_path: Path) -> None:
     source_path = tmp_path / "source.png"
     source_path.write_bytes(b"fixture")
     asset = ImageAsset.create(source_path)
@@ -56,50 +55,26 @@ def test_bridge_emits_scopes_from_the_rendered_preview(tmp_path: Path) -> None:
             self.calls.append(args)
 
     bridge = PyBridge.__new__(PyBridge)
-    bridge.app_state = SimpleNamespace(
-        active_asset=asset,
-        current_edit_state=EditState(asset_id=asset.id),
-    )
+    bridge.app_state = SimpleNamespace(active_asset=asset)
     bridge.editing_service = SimpleNamespace(
-        render_preview=lambda *_args: rendered
+        get_or_load_source_buffer=lambda *_args: rendered
     )
-    bridge._active_workspace = "color_studio"
     bridge._missing_source_notified = set()
+    bridge.config = SimpleNamespace(
+        performance=SimpleNamespace(preview_quality="balanced", preview_max_edge=2048)
+    )
     bridge._buffer_to_data_url = lambda _buffer: "preview"
     bridge.image_updated = Event()
-    bridge.histogram_updated = Event()
-    bridge.color_scopes_updated = Event()
+    bridge.before_image_updated = Event()
     bridge.notification = Event()
 
     bridge._do_render_preview()
 
     assert bridge.image_updated.calls == [("preview",)]
-    assert len(bridge.histogram_updated.calls) == 1
-    red, green, blue, luminance = bridge.histogram_updated.calls[0]
-    assert len(red) == len(green) == len(blue) == len(luminance) == 256
-    assert red[0] == 1
-    assert red[255] == pytest.approx(0.5)
-    assert green[0] == 1
-    assert green[255] == pytest.approx(0.5)
-    assert blue[0] == 1
-    assert blue[255] == pytest.approx(0.5)
-    assert luminance[29] == pytest.approx(0.5)
-    assert luminance[76] == pytest.approx(0.5)
-    assert luminance[127] == pytest.approx(0.5)
-    assert luminance[150] == pytest.approx(0.5)
-
-    (scopes,) = bridge.color_scopes_updated.calls[0]
-    assert scopes["waveform"]["width"] == 160
-    assert scopes["waveform"]["height"] == 90
-    assert len(scopes["waveform"]["data"]) == 160 * 90
-    assert max(scopes["waveform"]["data"]) == 255
-    assert scopes["vectorscope"]["width"] == 112
-    assert scopes["vectorscope"]["height"] == 112
-    assert len(scopes["vectorscope"]["data"]) == 112 * 112
-    assert max(scopes["vectorscope"]["data"]) == 255
+    assert bridge.before_image_updated.calls == [("preview",)]
 
 
-def test_bridge_clears_stale_scopes_when_source_is_missing(tmp_path: Path) -> None:
+def test_bridge_clears_stale_preview_when_source_is_missing(tmp_path: Path) -> None:
     asset = ImageAsset.create(tmp_path / "missing.png")
 
     class Event:
@@ -110,22 +85,17 @@ def test_bridge_clears_stale_scopes_when_source_is_missing(tmp_path: Path) -> No
             self.calls.append(args)
 
     bridge = PyBridge.__new__(PyBridge)
-    bridge.app_state = SimpleNamespace(
-        active_asset=asset,
-        current_edit_state=EditState(asset_id=asset.id),
-    )
-    bridge._active_workspace = "color_studio"
+    bridge.app_state = SimpleNamespace(active_asset=asset)
     bridge._missing_source_notified = set()
     bridge.image_updated = Event()
     bridge.before_image_updated = Event()
-    bridge.histogram_updated = Event()
-    bridge.color_scopes_updated = Event()
     bridge.notification = Event()
 
     bridge._do_render_preview()
 
-    assert bridge.color_scopes_updated.calls == [(None,)]
-    assert bridge.histogram_updated.calls == [([], [], [], [])]
+    assert bridge.image_updated.calls == [("",)]
+    assert bridge.before_image_updated.calls == [("",)]
+    assert len(bridge.notification.calls) == 1
 
 
 def test_scope_calculators_reject_empty_image_buffers() -> None:

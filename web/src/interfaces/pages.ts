@@ -8,6 +8,10 @@ import { ColorScopes, HistogramData } from './scopes';
 export interface DevelopPageProps {
   imageUrl: string;
   beforeImageUrl: string;
+  restorationPreviewUrl?: string;
+  restorationProgress?: { percent: number; message: string; cancellable: boolean } | null;
+  isRestorationRunning?: boolean;
+  hasRestorationPreview?: boolean;
   activeAsset: ImageAsset | null;
   editState: EditState;
   selectedMaskId: string | null;
@@ -15,6 +19,9 @@ export interface DevelopPageProps {
   selectedRetouchSpotId: string | null;
   onRetouchSpotSelect: (id: string | null) => void;
   onChange: (state: EditState) => void;
+  onAutoTone: () => void;
+  onPreviewAIRestoration?: () => void;
+  onCancelAIRestoration?: () => void;
   onResetAll: () => void;
   isCropActive: boolean;
   cropRect: { x: number; y: number; w: number; h: number };

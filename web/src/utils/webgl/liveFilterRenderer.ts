@@ -307,6 +307,7 @@ uniform float u_chroma_key_feather;
 
 // ── Tone & Exposure ──────────────────────────
 uniform float u_exposure;     // -5 … +5   EV
+uniform float u_brightness;   // -100 … +100
 uniform float u_contrast;     // -100 … +100
 uniform float u_highlights;   // -100 … +100
 uniform float u_shadows;      // -100 … +100
@@ -366,6 +367,11 @@ vec3 hsvToRgb(vec3 c) {
 // Python: multiplier = 2.0 ** exp.exposure; img *= multiplier
 vec3 applyExposure(vec3 c, float ev) {
   return c * pow(2.0, ev);
+}
+
+// Python: img += (brightness / 100) * 0.5
+vec3 applyBrightness(vec3 c, float brightness) {
+  return c + (brightness / 100.0) * 0.5;
 }
 
 // Python: factor = (contrast + 100) / 100; img = (img - 0.5) * factor + 0.5
@@ -801,6 +807,7 @@ void main() {
 
   // 1. Exposure  (2^EV scale)
   rgb = applyExposure(rgb, u_exposure);
+  rgb = applyBrightness(rgb, u_brightness);
 
   // 2. Contrast  ((c - 0.5) * factor + 0.5)
   rgb = applyContrast(rgb, u_contrast);
@@ -830,6 +837,9 @@ void main() {
   // 10. Lift, gamma, gain, offset and 3D LUT
   rgb = applyColorGrading(rgb);
 
+  // Match Python's local-adjustment order before detail processing.
+  rgb = applyLocalMasks(rgb, imageUv);
+
   // 11. Noise reduction, sharpening, clarity and texture
   rgb = applyDetail(rgb, imageUv, texture2D(u_image, imageUv).rgb);
 
@@ -838,7 +848,6 @@ void main() {
 
   // 13. Lens vignette correction, matching LensCorrectionEngine.
   rgb = applyLensVignette(rgb, imageUv);
-  rgb = applyLocalMasks(rgb, imageUv);
   rgb = applyCreativeVignette(rgb, imageUv);
 
   float alpha = tex.a * geometryValid;
@@ -956,7 +965,7 @@ export class LiveFilterRenderer {
       'u_mask_count', 'u_retouch_count',
       'u_vignette_enabled', 'u_vignette_amount', 'u_vignette_midpoint', 'u_vignette_feather',
       'u_chroma_key_enabled', 'u_chroma_key_color', 'u_chroma_key_tolerance', 'u_chroma_key_feather',
-      'u_exposure', 'u_contrast',
+      'u_exposure', 'u_brightness', 'u_contrast',
       'u_highlights', 'u_shadows', 'u_whites', 'u_blacks',
       'u_temperature', 'u_tint',
       'u_saturation', 'u_vibrance',
@@ -1179,6 +1188,7 @@ export class LiveFilterRenderer {
       gl.uniform1f(this.uloc[name], val);
 
     u('u_exposure',    exp?.exposure    ?? 0);
+    u('u_brightness',  exp?.brightness  ?? 0);
     u('u_contrast',    exp?.contrast    ?? 0);
     u('u_highlights',  exp?.highlights  ?? 0);
     u('u_shadows',     exp?.shadows     ?? 0);

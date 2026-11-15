@@ -21,5 +21,7 @@ export interface AssetMetadataOverrides {
   title: string;
   description: string;
   keywords: string[];
+  creator: string;
   copyright: string;
+  usage_terms: string;
 }

@@ -53,6 +53,9 @@ interface RightPanelProps {
   onRetouchSpotSelect?: (spotId: string | null) => void;
   onChange: (newState: EditState) => void;
   onAutoTone?: () => void;
+  onPreviewAIRestoration?: () => void;
+  isRestorationRunning?: boolean;
+  hasRestorationPreview?: boolean;
   onResetAll?: () => void;
   isCropActive?: boolean;
   onToggleCrop?: () => void;
@@ -233,6 +236,9 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   onRetouchSpotSelect,
   onChange,
   onAutoTone,
+  onPreviewAIRestoration,
+  isRestorationRunning = false,
+  hasRestorationPreview = false,
   onResetAll,
   isCropActive,
   onToggleCrop,
@@ -614,6 +620,13 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                   onChange={(v) => updateExposure('exposure', v)}
                 />
                 <PrecisionSlider
+                  label="Brightness"
+                  value={editState.exposure.brightness}
+                  min={-100}
+                  max={100}
+                  onChange={(v) => updateExposure('brightness', v)}
+                />
+                <PrecisionSlider
                   label="Contrast"
                   value={editState.exposure.contrast}
                   min={-100}
@@ -720,9 +733,32 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                   </select>
                 </div>
                 <p className="text-[9px] leading-relaxed text-obsidian-textMut">
-                  AI restores detail locally and uses DirectML/CUDA when supported, with CPU
-                  fallback. It can invent fine details; review the result.
+                  Preview the current photo with local AI here; final export renders the saved
+                  restoration target. Uses GPU acceleration when supported, with CPU fallback.
                 </p>
+                <button
+                  type="button"
+                  onClick={onPreviewAIRestoration}
+                  disabled={
+                    !enhancementModelReady ||
+                    !onPreviewAIRestoration ||
+                    isRestorationRunning ||
+                    (editState.detail.enhancement_resolution ?? 0) === 0
+                  }
+                  className="flex w-full items-center justify-center gap-1.5 rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-1.5 text-[10px] font-semibold text-emerald-300 disabled:opacity-40"
+                >
+                  <Sparkles size={11} />
+                  {isRestorationRunning
+                    ? 'Restoring current photo…'
+                    : hasRestorationPreview
+                      ? 'Refresh restoration preview'
+                      : 'Preview AI restoration'}
+                </button>
+                {hasRestorationPreview && !isRestorationRunning && (
+                  <p role="status" className="text-[9px] text-emerald-300">
+                    Restoration preview ready. The selected target will run during export.
+                  </p>
+                )}
                 {!enhancementModelReady && (
                   <button
                     type="button"

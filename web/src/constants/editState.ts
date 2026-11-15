@@ -2,7 +2,7 @@ import { EditState } from '../interfaces/edit';
 
 export const DEFAULT_EDIT_STATE: EditState = {
   asset_id: 'default',
-  exposure: { exposure: 0.0, contrast: 0.0, highlights: 0.0, shadows: 0.0, whites: 0.0, blacks: 0.0 },
+  exposure: { exposure: 0.0, brightness: 0.0, contrast: 0.0, highlights: 0.0, shadows: 0.0, whites: 0.0, blacks: 0.0 },
   white_balance: { temperature: 0.0, tint: 0.0, saturation: 0.0, vibrance: 0.0 },
   detail: {
     sharpening: 0.0,

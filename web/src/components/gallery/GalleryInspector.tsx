@@ -359,7 +359,9 @@ const MetadataOverridesEditor: React.FC<MetadataOverridesEditorProps> = ({ asset
   const [title, setTitle] = useState(asset.metadata_overrides?.title ?? '');
   const [description, setDescription] = useState(asset.metadata_overrides?.description ?? '');
   const [keywords, setKeywords] = useState((asset.metadata_overrides?.keywords ?? []).join('\n'));
+  const [creator, setCreator] = useState(asset.metadata_overrides?.creator ?? '');
   const [copyright, setCopyright] = useState(asset.metadata_overrides?.copyright ?? '');
+  const [usageTerms, setUsageTerms] = useState(asset.metadata_overrides?.usage_terms ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
@@ -374,12 +376,16 @@ const MetadataOverridesEditor: React.FC<MetadataOverridesEditorProps> = ({ asset
         title,
         description,
         keywords: keywords.split(/\r?\n/).map((keyword) => keyword.trim()).filter(Boolean),
+        creator,
         copyright,
+        usage_terms: usageTerms,
       });
       setTitle(updated.title);
       setDescription(updated.description);
       setKeywords(updated.keywords.join('\n'));
+      setCreator(updated.creator);
       setCopyright(updated.copyright);
+      setUsageTerms(updated.usage_terms);
       setSaved(true);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : String(saveError));
@@ -422,10 +428,28 @@ const MetadataOverridesEditor: React.FC<MetadataOverridesEditorProps> = ({ asset
         />
       </label>
       <label className="block">
+        <span className="mb-1 block font-bold text-obsidian-textMut">CREATOR / PHOTOGRAPHER</span>
+        <input
+          value={creator}
+          onChange={(event) => { setCreator(event.target.value); setSaved(false); }}
+          maxLength={256}
+          className="w-full rounded border border-obsidian-border bg-obsidian-deep px-2 py-1 text-white select-text"
+        />
+      </label>
+      <label className="block">
         <span className="mb-1 block font-bold text-obsidian-textMut">COPYRIGHT</span>
         <input
           value={copyright}
           onChange={(event) => { setCopyright(event.target.value); setSaved(false); }}
+          maxLength={512}
+          className="w-full rounded border border-obsidian-border bg-obsidian-deep px-2 py-1 text-white select-text"
+        />
+      </label>
+      <label className="block">
+        <span className="mb-1 block font-bold text-obsidian-textMut">USAGE TERMS</span>
+        <input
+          value={usageTerms}
+          onChange={(event) => { setUsageTerms(event.target.value); setSaved(false); }}
           maxLength={512}
           className="w-full rounded border border-obsidian-border bg-obsidian-deep px-2 py-1 text-white select-text"
         />

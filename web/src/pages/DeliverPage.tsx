@@ -22,6 +22,7 @@ import {
   X,
 } from 'lucide-react';
 import { bridge } from '../bridge';
+import { useAppStore } from '../stores/useAppStore';
 import kuroAppIcon from '../assets/logo-preview.png';
 import kuroWordmark from '../assets/KuroLight-wordmark.svg';
 import { GalleryThumbnail } from '../components/gallery/GalleryThumbnail';
@@ -29,6 +30,9 @@ import { matchesSmartCollectionRules } from '../utils/smartCollections';
 import type { DeliverPageProps, ExportRecipe } from '../interfaces';
 import type { ExportFormat, ColorSpace, ResizeMode, WatermarkPosition, WatermarkType } from '../types';
 import { FORMAT_OPTIONS, RECIPES_KEY } from '../constants';
+import { getCachedLocalEditState } from '../utils/storage/imageIndexedDb';
+import { encodeLUTCube, isBuiltinLUT, loadLUT } from '../utils/webgl/lut';
+import type { EditState } from '../interfaces/edit';
 
 export type { DeliverPageProps, ExportRecipe };
 
@@ -332,7 +336,50 @@ export const DeliverPage: React.FC<DeliverPageProps> = ({
         watermark_position: watermarkPosition,
       };
 
-      const started = await bridge.exportAssets(settings);
+      const current = useAppStore.getState();
+      const editStates: Record<string, EditState> = {};
+      await Promise.all(
+        settings.asset_ids.map(async (assetId) => {
+          if (current.activeAsset?.id === assetId) {
+            if (current.editState.asset_id !== assetId) {
+              throw new Error(`The active edit state does not match photo "${assetId}".`);
+            }
+            editStates[assetId] = current.editState;
+            return;
+          }
+          const cachedState = await getCachedLocalEditState(assetId);
+          if (cachedState && cachedState.asset_id !== assetId) {
+            throw new Error(`The browser edit cache does not match photo "${assetId}".`);
+          }
+          if (cachedState) editStates[assetId] = cachedState;
+        })
+      );
+
+      const customLUTs: Record<string, { size: number; data_base64: string }> = {};
+      const customLUTNames = new Set(
+        Object.values(editStates)
+          .filter((state) => (state.color_grading?.lut_intensity ?? 1) > 0)
+          .map((state) => state.color_grading?.lut_name)
+          .filter(
+            (name): name is string =>
+              typeof name === 'string' && name.length > 0 && !isBuiltinLUT(name)
+          )
+      );
+      await Promise.all(
+        Array.from(customLUTNames, async (name) => {
+          const cube = await loadLUT(name);
+          if (!cube) {
+            throw new Error(`Custom LUT "${name}" is missing from this browser.`);
+          }
+          customLUTs[name] = { size: cube.size, data_base64: encodeLUTCube(cube) };
+        })
+      );
+
+      const started = await bridge.exportAssets({
+        ...settings,
+        edit_states: editStates,
+        custom_luts: customLUTs,
+      });
       if (!started.ok || !started.job_id) {
         throw new Error(started.error ?? 'Could not start the export batch');
       }
@@ -948,7 +995,11 @@ export const DeliverPage: React.FC<DeliverPageProps> = ({
                 <div className="flex items-center justify-between text-xs font-semibold text-obsidian-accent">
                   <div className="flex items-center gap-2">
                     <Loader2 size={14} className="animate-spin" />
-                    <span>{exportJob?.status === 'paused' ? 'Export paused' : `Exporting ${exportJob?.current_asset || 'images'}…`}</span>
+                    <span>
+                      {exportJob?.status === 'paused'
+                        ? 'Export paused'
+                        : `Exporting ${exportJob?.current_asset || 'images'}…`}
+                    </span>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-[10px]">

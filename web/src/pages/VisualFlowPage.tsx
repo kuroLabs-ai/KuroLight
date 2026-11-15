@@ -343,6 +343,7 @@ export const VisualFlowPage: React.FC<VisualFlowPageProps> = ({
           ...resetState,
           exposure: {
             exposure: 0,
+            brightness: 0,
             contrast: 0,
             highlights: 0,
             shadows: 0,

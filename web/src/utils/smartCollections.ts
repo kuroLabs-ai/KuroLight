@@ -37,7 +37,9 @@ export function matchesSmartCollectionRules(
     asset.lens_model,
     asset.metadata_overrides?.title,
     asset.metadata_overrides?.description,
+    asset.metadata_overrides?.creator,
     asset.metadata_overrides?.copyright,
+    asset.metadata_overrides?.usage_terms,
     ...(asset.metadata_overrides?.keywords ?? []),
   ];
   return searchableValues.some((value) => value?.toLocaleLowerCase().includes(query));

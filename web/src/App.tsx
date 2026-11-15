@@ -1,4 +1,4 @@
-import React, { useCallback, useState, Suspense, lazy } from 'react';
+import React, { useCallback, useRef, useState, Suspense, lazy } from 'react';
 import { toast, Toaster } from 'sonner';
 import { TopBar, Filmstrip } from '@/components';
 import { GalleryPage, DevelopPage } from '@/pages';
@@ -18,7 +18,11 @@ import {
   deleteEditingPreset,
   saveEditingPreset,
 } from '@/utils/editingPresets';
+import { encodeLUTCube, isBuiltinLUT, loadLUT } from '@/utils/webgl/lut';
 import type { WorkspaceId, EditState, ImageAsset } from '@/types';
+import type { SettingsTab } from '@/components/settings/types';
+
+const AI_RESTORATION_PROGRESS_MESSAGE = 'Restoring current photo with local AI';
 
 // Code-split secondary workspaces & heavy modals for instant startup
 const ColorStudioPage = lazy(() =>
@@ -118,6 +122,15 @@ export const App: React.FC = () => {
   } = useAppStore();
   const [selectedFilmstripAssets, setSelectedFilmstripAssets] =
     useState<ImageAsset[] | null>(null);
+  const [settingsInitialTab, setSettingsInitialTab] =
+    useState<SettingsTab>('performance');
+  const [restorationPreview, setRestorationPreview] = useState<{
+    assetId: string;
+    editStateJson: string;
+    url: string;
+  } | null>(null);
+  const [isRestorationRunning, setIsRestorationRunning] = useState(false);
+  const restorationRequestRef = useRef(0);
 
   // Resizable Panels
   const {
@@ -241,6 +254,105 @@ export const App: React.FC = () => {
     ]
   );
 
+  const handleAutoTone = useCallback(async () => {
+    const { activeAsset: currentAsset, editState: currentEditState } =
+      useAppStore.getState();
+    if (!currentAsset || currentEditState.asset_id !== currentAsset.id) {
+      toast.error('No photo selected', {
+        description: 'Select a photo before applying Auto Tone.',
+      });
+      return;
+    }
+
+    try {
+      const nextState = await bridge.analyzeAutoTone(
+        currentAsset.id,
+        currentEditState,
+      );
+      if (useAppStore.getState().activeAsset?.id !== currentAsset.id) {
+        toast.error('Auto Tone not applied', {
+          description: 'The active photo changed while Auto Tone was running.',
+        });
+        return;
+      }
+      handleEditChange(nextState);
+      toast.success('Auto Tone applied');
+    } catch (error) {
+      toast.error('Auto Tone failed', {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [handleEditChange]);
+
+  const handlePreviewAIRestoration = useCallback(async () => {
+    const { activeAsset: currentAsset, editState: currentEditState } =
+      useAppStore.getState();
+    if (!currentAsset || currentEditState.asset_id !== currentAsset.id) {
+      toast.error('No photo selected', {
+        description: 'Select a photo before previewing AI restoration.',
+      });
+      return;
+    }
+    if (!currentEditState.detail.enhancement_resolution) {
+      toast.error('Choose a restoration target', {
+        description: 'Select a target resolution before previewing AI restoration.',
+      });
+      return;
+    }
+
+    const requestId = ++restorationRequestRef.current;
+    const stateSnapshot = structuredClone(currentEditState);
+    const editStateJson = JSON.stringify(stateSnapshot);
+    setRestorationPreview(null);
+    setIsRestorationRunning(true);
+    try {
+      const customLuts: Record<string, { size: number; data_base64: string }> = {};
+      const lutName = stateSnapshot.color_grading.lut_name;
+      if (lutName && !isBuiltinLUT(lutName)) {
+        const cube = await loadLUT(lutName);
+        if (!cube) {
+          throw new Error(`The selected custom LUT "${lutName}" is unavailable.`);
+        }
+        customLuts[lutName] = {
+          size: cube.size,
+          data_base64: encodeLUTCube(cube),
+        };
+      }
+
+      const result = await bridge.previewAIRestoration(
+        currentAsset.id,
+        stateSnapshot,
+        customLuts,
+      );
+      if (result.cancelled || requestId !== restorationRequestRef.current) return;
+
+      const latest = useAppStore.getState();
+      if (
+        latest.activeAsset?.id !== currentAsset.id ||
+        JSON.stringify(latest.editState) !== editStateJson
+      ) {
+        toast.error('Restoration preview discarded', {
+          description: 'The photo or its settings changed while restoration was running.',
+        });
+        return;
+      }
+      setRestorationPreview({
+        assetId: currentAsset.id,
+        editStateJson,
+        url: result.previewUrl,
+      });
+      toast.success('AI restoration preview ready');
+    } catch (error) {
+      toast.error('AI restoration failed', {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      if (requestId === restorationRequestRef.current) {
+        setIsRestorationRunning(false);
+      }
+    }
+  }, []);
+
   const handleApplyPreset = useCallback(
     (presetId: string) => {
       const preset = presets.find((item) => item.id === presetId);
@@ -332,12 +444,22 @@ export const App: React.FC = () => {
         onSave={() => void handleSaveEdits()}
         onOpenAI={() => setIsAIPopupOpen(!isAIPopupOpen)}
         isAIOpen={isAIPopupOpen}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={() => {
+          setSettingsInitialTab('performance');
+          setIsSettingsOpen(true);
+        }}
+        onOpenShortcuts={() => {
+          setSettingsInitialTab('shortcuts');
+          setIsSettingsOpen(true);
+        }}
       />
 
       <Toaster richColors position="top-right" theme="dark" closeButton />
 
       {processingProgress && (
+        workspace !== 'develop' ||
+        processingProgress.message !== AI_RESTORATION_PROGRESS_MESSAGE
+      ) && (
         <div
           role="status"
           aria-live="polite"
@@ -381,6 +503,7 @@ export const App: React.FC = () => {
               onClose={() => setIsAIPopupOpen(false)}
               activeAssetId={activeAsset?.id}
               activeFileName={activeAsset?.file_name}
+              editState={editState}
               onSelectAsset={(id) => bridge.selectAsset(id)}
               availableAssets={assets}
             />
@@ -436,6 +559,22 @@ export const App: React.FC = () => {
           <DevelopPage
             imageUrl={imageUrl}
             beforeImageUrl={beforeImageUrl}
+            restorationPreviewUrl={
+              restorationPreview?.assetId === activeAsset?.id &&
+              restorationPreview.editStateJson === JSON.stringify(editState)
+                ? restorationPreview.url
+                : undefined
+            }
+            restorationProgress={
+              processingProgress?.message === AI_RESTORATION_PROGRESS_MESSAGE
+                ? processingProgress
+                : null
+            }
+            isRestorationRunning={isRestorationRunning}
+            hasRestorationPreview={
+              restorationPreview?.assetId === activeAsset?.id &&
+              restorationPreview.editStateJson === JSON.stringify(editState)
+            }
             activeAsset={activeAsset}
             editState={editState}
             selectedMaskId={selectedMaskId}
@@ -443,6 +582,9 @@ export const App: React.FC = () => {
             selectedRetouchSpotId={selectedRetouchSpotId}
             onRetouchSpotSelect={setSelectedRetouchSpotId}
             onChange={handleEditChange}
+            onAutoTone={() => void handleAutoTone()}
+            onPreviewAIRestoration={() => void handlePreviewAIRestoration()}
+            onCancelAIRestoration={() => void bridge.cancelProcessing()}
             onResetAll={handleResetAll}
             isCropActive={isCropActive}
             cropRect={cropRect}
@@ -551,7 +693,11 @@ export const App: React.FC = () => {
 
       {isSettingsOpen && (
         <Suspense fallback={null}>
-          <SettingsPopup isOpen onClose={() => setIsSettingsOpen(false)} />
+          <SettingsPopup
+            isOpen
+            initialTab={settingsInitialTab}
+            onClose={() => setIsSettingsOpen(false)}
+          />
         </Suspense>
       )}
 

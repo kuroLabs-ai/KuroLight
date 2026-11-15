@@ -13,6 +13,25 @@ const BUILTIN_LUT_NAMES = new Set([
   'Vintage Warmth',
 ]);
 
+export function isBuiltinLUT(name: string): boolean {
+  return BUILTIN_LUT_NAMES.has(name);
+}
+
+export function encodeLUTCube(cube: LUTCube): string {
+  const bytes = new Uint8Array(cube.data.length * Float32Array.BYTES_PER_ELEMENT);
+  const view = new DataView(bytes.buffer);
+  for (let index = 0; index < cube.data.length; index += 1) {
+    view.setFloat32(index * Float32Array.BYTES_PER_ELEMENT, cube.data[index], true);
+  }
+
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
 export function parseCubeText(text: string): LUTCube {
   let size = 33;
   const entries: number[] = [];
@@ -22,6 +41,15 @@ export function parseCubeText(text: string): LUTCube {
     if (!line || line.startsWith('#') || line.startsWith('TITLE')) continue;
     if (line.startsWith('LUT_3D_SIZE')) {
       size = Number(line.split(/\s+/)[1]);
+      continue;
+    }
+    if (line.startsWith('DOMAIN_MIN') || line.startsWith('DOMAIN_MAX')) {
+      const [directive, ...domainValues] = line.split(/\s+/);
+      const expected = directive === 'DOMAIN_MIN' ? 0 : 1;
+      const domain = domainValues.map(Number);
+      if (domain.length !== 3 || domain.some((value) => value !== expected)) {
+        throw new Error('Custom .cube input domains are not supported.');
+      }
       continue;
     }
 
@@ -38,7 +66,19 @@ export function parseCubeText(text: string): LUTCube {
     throw new Error(`Invalid .cube file: expected ${size ** 3} color entries.`);
   }
 
-  return { size, data: Float32Array.from(entries) };
+  const data = new Float32Array(entries.length);
+  for (let b = 0; b < size; b += 1) {
+    for (let g = 0; g < size; g += 1) {
+      for (let r = 0; r < size; r += 1) {
+        const fileOffset = ((b * size + g) * size + r) * 3;
+        const cubeOffset = ((r * size + g) * size + b) * 3;
+        data[cubeOffset] = entries[fileOffset];
+        data[cubeOffset + 1] = entries[fileOffset + 1];
+        data[cubeOffset + 2] = entries[fileOffset + 2];
+      }
+    }
+  }
+  return { size, data };
 }
 
 export function registerCustomLUT(name: string, cube: LUTCube): void {

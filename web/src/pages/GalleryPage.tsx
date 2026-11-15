@@ -84,6 +84,7 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeSourceFolder, setActiveSourceFolder] = useState<string | null>(null);
   const [isTrashView, setIsTrashView] = useState(false);
+  const [confirmPermanentDelete, setConfirmPermanentDelete] = useState(true);
   const [sortMode, setSortMode] = useState<'name' | 'date' | 'rating' | 'size'>('name');
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
   const [visibleAssetCount, setVisibleAssetCount] = useState(GALLERY_BATCH_SIZE);
@@ -101,6 +102,29 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
   const [sourceFoldersError, setSourceFoldersError] = useState<string | null>(null);
   const sourceFolderRequestId = useRef(0);
   const resetVisibleAssets = () => setVisibleAssetCount(GALLERY_BATCH_SIZE);
+
+  useEffect(() => {
+    let active = true;
+    const handlePreferencesUpdated = (event: Event) => {
+      const preferencesEvent = event as CustomEvent<{
+        appearance?: { confirm_disk_deletion?: boolean };
+      }>;
+      const value = preferencesEvent.detail?.appearance?.confirm_disk_deletion;
+      if (typeof value === 'boolean') setConfirmPermanentDelete(value);
+    };
+    window.addEventListener('kurolight:preferences-updated', handlePreferencesUpdated);
+    void bridge.getPreferences().then((prefs) => {
+      if (active) {
+        setConfirmPermanentDelete(prefs.appearance.confirm_disk_deletion);
+      }
+    }).catch((error: unknown) => {
+      console.error('[KuroLight] Could not load deletion preference:', error);
+    });
+    return () => {
+      active = false;
+      window.removeEventListener('kurolight:preferences-updated', handlePreferencesUpdated);
+    };
+  }, []);
 
   // ── Selection State ──
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
@@ -527,16 +551,17 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
       const message = isTrashView
         ? `Permanently delete ${ids.length} photo(s) from the catalog? Their source files will not be changed.`
         : `Move ${ids.length} photo(s) to Recently Deleted?`;
-      if (confirm(message)) {
-        if (isTrashView) {
-          bridge.permanentlyDeleteAssets(ids);
-        } else {
-          bridge.deleteAssets(ids);
-        }
-        handleClearSelection();
+      if ((!isTrashView || confirmPermanentDelete) && !confirm(message)) {
+        return;
       }
+      if (isTrashView) {
+        bridge.permanentlyDeleteAssets(ids);
+      } else {
+        bridge.deleteAssets(ids);
+      }
+      handleClearSelection();
     }
-  }, [selectedAssetIds, handleClearSelection, isTrashView]);
+  }, [selectedAssetIds, handleClearSelection, isTrashView, confirmPermanentDelete]);
 
   const handleRestoreSelected = useCallback(() => {
     const ids = Array.from(selectedAssetIds);

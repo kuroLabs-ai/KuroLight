@@ -3,6 +3,7 @@ import { RetouchMode } from '../types/retouch';
 
 export interface ExposureSettings {
   exposure: number;
+  brightness: number;
   contrast: number;
   highlights: number;
   shadows: number;
@@ -65,7 +66,7 @@ export interface HSLSettings {
 export interface ColorWheelValue {
   hue: number; // 0 - 360
   saturation: number; // 0 - 1
-  luminance: number; // -100 to 100
+  luminance: number; // -1 to 1
 }
 
 export interface ColorGradingSettings {
@@ -142,5 +143,6 @@ export interface EditSnapshot {
 }
 
 export interface EditState extends EditSnapshot {
+  schema_version?: number;
   snapshots?: Record<string, EditSnapshot>;
 }
