@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/icons/KuroLight_combined_logo_horizontal.png" alt="KuroLight neon cat emblem" width="176" />
+<img src="assets/icons/KuroLight_combined_logo_horizontal.png" alt="KuroLight neon cat emblem" />
 
 # KuroLight
 
